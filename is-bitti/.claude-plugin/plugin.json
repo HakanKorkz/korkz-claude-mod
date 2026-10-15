@@ -1,6 +1,6 @@
 {
   "name": "is-bitti",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Uzun süren bir iş bitince ya da Claude onay beklerken ses çalar, masaüstü bildirimi ve toast gösterir",
   "author": {
     "name": "HakanKorkz"

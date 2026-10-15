@@ -17,6 +17,9 @@ const SES = '/usr/share/sounds/freedesktop/stereo'
 // Onay bekleyen bildirimler; idle_prompt iş bitti bildirimiyle çakışır.
 const ONAY_TURLERI = new Set(['permission_prompt', 'elicitation_dialog'])
 
+// Kullanıcının kendi gönderdiği prompt'lar; task-notification, zamanlanmış tetikler vb. değil.
+const KULLANICI_KAYNAKLARI = new Set(['composer', 'bridge', 'sdk'])
+
 type SesTuru = 'bitti' | 'hata' | 'onay'
 
 const SESLER: Record<SesTuru, { oga: string; canberra: string; mac: string }> = {
@@ -161,7 +164,9 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (e.command === undefined) baslangic = await $.clock.now()
+    // Arka plan işinin bitiş bildirimi gibi otomatik prompt'lar süreyi sıfırlamaz.
+    const kullanici = KULLANICI_KAYNAKLARI.has(e.origin?.kind ?? 'composer')
+    if (e.command === undefined && e.isMeta !== true && kullanici) baslangic = await $.clock.now()
 
     return next(e)
   }).catch(($, e, next) => next(e))

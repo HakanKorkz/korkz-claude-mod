@@ -62,7 +62,9 @@ test('süre prompt gönderildiği andan ölçülür: arka plana bölünen iş de
   await $.turn.complete(tur(10_000))
   expect(k.toasts.length).toBe(0)
 
+  // Arka plan işinin bildirimi yeni bir prompt gibi gelir ama sayacı sıfırlamaz.
   k.saat += 65_000
+  await $.prompt.submit({ text: '<task-notification>', origin: { kind: 'task-notification' } } as never)
   await $.turn.complete(tur(3_000))
   expect(k.toasts[0]).toContain('1 dk 15 sn')
 
