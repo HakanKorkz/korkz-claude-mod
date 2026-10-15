@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Limit, Plugins, Tools, Usage } from '../types'
+import type { Erisim, Limit, Plugins, Tools, Usage } from '../types'
 
 // Eski sürümün açtığı yan panel; açık kaldıysa kapatılır.
 const ESKI_PANEL = 'oturum-maliyeti'
@@ -35,6 +35,8 @@ const isHidden = atom({ plugin: 'oturum-maliyeti', key: 'isHidden' } as const, f
 const model = atom({ plugin: 'oturum-maliyeti', key: 'model' } as const, null as string | null)
 const modelOptions = atom({ plugin: 'oturum-maliyeti', key: 'modelOptions' } as const, [] as string[])
 const isModelMenuOpen = atom({ plugin: 'oturum-maliyeti', key: 'isModelMenuOpen' } as const, false)
+const projeModeli = atom({ plugin: 'oturum-maliyeti', key: 'projeModeli' } as const, null as string | null)
+const erisim = atom({ plugin: 'oturum-maliyeti', key: 'erisim' } as const, {} as Record<string, Erisim>)
 
 // `claude-opus-5-5[1m]` → `Opus 5.5 (1M)`; tarih ekleri (`-20251001`) atılır.
 export const modelAdi = (id: string) => {
@@ -49,21 +51,46 @@ export const modelAdi = (id: string) => {
   return uzun ? `${ad} (1M)` : ad
 }
 
-// Menüdeki seçeneklerin adları; diğerleri modelAdi ile yazılır.
-const SECENEK_ADI: Record<string, string> = {
-  default: 'Varsayılan',
-  best: 'En iyi',
-  opusplan: 'Opus plan',
+const uzunMu = (x: string) => /\[1m\]$/i.test(x)
+const aileOf = (x: string) => x.replace(/\[1m\]$/i, '').replace(/^claude-/, '').split('-')[0] ?? x
+
+// Model isteği tam kimlik ister; kısa adların bilinen karşılıkları. Oturumda
+// görülen daha yeni kimlikler (`$.session.model()`) bunların yerine geçer.
+const BILINEN_KIMLIK: Record<string, string> = {
+  haiku: 'claude-haiku-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  opus: 'claude-opus-5-5',
+  fable: 'claude-fable-5-1',
 }
-export const secenekAdi = (s: string) => SECENEK_ADI[s] ?? modelAdi(s)
 
-// Şu anki model id'si bu seçeneğe mi karşılık geliyor (`opus` ↔ `claude-opus-5-5`).
-export const seciliMi = (secenek: string, id: string | null) => {
-  if (id === null) return false
-  const uzun = (x: string) => /\[1m\]$/i.test(x)
-  const aile = (x: string) => x.replace(/\[1m\]$/i, '').replace(/^claude-/, '').split('-')[0]
+// `sonnet[1m]` → `claude-sonnet-5-5[1m]`; bilinmeyen kısa adda undefined.
+export const kimlikCoz = (secenek: string, ogrenilen: Record<string, string> = {}) => {
+  if (secenek.startsWith('claude-')) return secenek
+  const aile = aileOf(secenek)
+  const id = ogrenilen[aile] ?? BILINEN_KIMLIK[aile]
+  if (id === undefined) return undefined
 
-  return secenek === id || (aile(secenek) === aile(id) && uzun(secenek) === uzun(id))
+  return uzunMu(secenek) ? `${id}[1m]` : id
+}
+
+// Menüde gösterilen seçenekler: `default` ve kimliği çözülebilen modeller.
+// `best` ve `opusplan` adım adım model değişimiyle anlatılamaz.
+export const menuSecenekleri = (secenekler: readonly string[]) =>
+  secenekler.filter(s => s === 'default' || (s !== 'best' && s !== 'opusplan' && kimlikCoz(s) !== undefined))
+
+export const secenekAdi = (s: string, genel: string | null = null) =>
+  s === 'default' ? `Genel ayar${genel === null ? '' : ` (${modelAdi(genel)})`}` : modelAdi(kimlikCoz(s) ?? s).replace(/ [\d.]+( \(1M\))?$/, '$1')
+
+const ERISIM_SURESI = 12 * 3_600_000
+
+type ErisimKaydi = Record<string, { durum: 'var' | 'yok'; at: number }>
+
+// Bu projede seçili modelin tam kimliği; turn.step her istekte bunu kullanır.
+let projeKimligi: string | undefined
+let kok = ''
+
+async function ogrenilenler($: EngineInterface) {
+  return ((await $.store.get('modelKimlikleri')) ?? {}) as Record<string, string>
 }
 
 async function modelYenile($: EngineInterface) {
@@ -72,21 +99,92 @@ async function modelYenile($: EngineInterface) {
     $.config.list().then(r => r.find(x => x.key === 'model')).catch(() => undefined),
   ])
   await update($, model, () => id)
-  if (satir?.options !== undefined && !satir.isLocked) {
-    await update($, modelOptions, () => [...(satir.options ?? [])])
+  if (id !== null && id.startsWith('claude-')) {
+    const o = await ogrenilenler($)
+    const temiz = id.replace(/\[1m\]$/i, '')
+    if (o[aileOf(id)] !== temiz) await $.store.set('modelKimlikleri', { ...o, [aileOf(id)]: temiz })
   }
+  if (satir?.options !== undefined) {
+    await update($, modelOptions, () => menuSecenekleri(satir.options ?? []))
+  }
+}
+
+async function projeYukle($: EngineInterface) {
+  kok = await $.session.root().catch(() => '')
+  const harita = ((await $.store.get('projeModelleri')) ?? {}) as Record<string, string>
+  const secim = harita[kok] ?? null
+  await update($, projeModeli, () => secim)
+  projeKimligi = secim === null ? undefined : kimlikCoz(secim, await ogrenilenler($))
+}
+
+async function projeModeliYaz($: EngineInterface, secim: string | null) {
+  const harita = ((await $.store.get('projeModelleri')) ?? {}) as Record<string, string>
+  const { [kok]: _, ...diger } = harita
+  await $.store.set('projeModelleri', secim === null ? diger : { ...diger, [kok]: secim })
+  await update($, projeModeli, () => secim)
+  projeKimligi = secim === null ? undefined : kimlikCoz(secim, await ogrenilenler($))
+}
+
+// Her modele 1 token'lık bir istek: yanıt veren planda var. Başka bir model
+// yanıt verirken 429/403/404 alan planda yok (Fable gibi kredi isteyenler 429 döner).
+async function erisimDenetle($: EngineInterface) {
+  const secenekler = (await read($, modelOptions)).filter(s => s !== 'default')
+  const kayit = ((await $.store.get('erisim')) ?? {}) as ErisimKaydi
+  const simdi = await $.clock.now()
+  const taze = (s: string) => kayit[s] !== undefined && simdi - (kayit[s]?.at ?? 0) < ERISIM_SURESI
+  const bakilacak = secenekler.filter(s => !taze(s))
+  const gorunen = (): Record<string, Erisim> =>
+    Object.fromEntries(secenekler.filter(taze).map(s => [s, kayit[s]?.durum ?? 'var']))
+  await update($, erisim, () => ({ ...gorunen(), ...Object.fromEntries(bakilacak.map(s => [s, 'bakiliyor' as const])) }))
+  if (bakilacak.length === 0) return
+
+  const o = await ogrenilenler($)
+  const sonuclar = await Promise.all(
+    bakilacak.map(async s => {
+      const id = kimlikCoz(s, o)
+      const r = id === undefined ? undefined : await $.model.complete({ model: id, prompt: 'ok', maxTokens: 1 }).catch(() => undefined)
+      return [s, r] as const
+    }),
+  )
+  const yanitlayan = (r: (typeof sonuclar)[number][1]) => r !== undefined && (r.isAnswered || r.reason === 'empty-reply')
+  const biriCalisiyor = sonuclar.some(([, r]) => yanitlayan(r)) || secenekler.some(s => taze(s) && kayit[s]?.durum === 'var')
+  const yeni: ErisimKaydi = { ...kayit }
+  for (const [s, r] of sonuclar) {
+    if (yanitlayan(r)) {
+      yeni[s] = { durum: 'var', at: simdi }
+    } else if (r !== undefined && !r.isAnswered && r.reason === 'api-error' && (r.status === 403 || r.status === 404 || (r.status === 429 && biriCalisiyor))) {
+      yeni[s] = { durum: 'yok', at: simdi }
+    }
+  }
+  await $.store.set('erisim', yeni)
+  await update($, erisim, () =>
+    Object.fromEntries(secenekler.flatMap(s => (yeni[s] !== undefined && simdi - (yeni[s]?.at ?? 0) < ERISIM_SURESI ? [[s, yeni[s]?.durum ?? 'var']] : []))),
+  )
+}
+
+async function menuyuAc($: EngineInterface) {
+  const acik = await update($, isModelMenuOpen, a => !a)
+  if (acik) await erisimDenetle($)
 }
 
 async function modeleGec($: EngineInterface, secenek: string) {
   await update($, isModelMenuOpen, () => false)
-  const r = await $.config.set({ key: 'model', value: secenek }).catch((h: unknown) => ({ deny: String(h) }))
-  if (r.deny !== undefined) {
-    $.ui.toast(`Model değiştirilemedi: ${r.deny}`)
+  if ((await read($, erisim))[secenek] === 'yok') {
+    $.ui.toast(`🔒 ${secenekAdi(secenek)} planına dahil değil`)
     return
   }
-  await modelYenile($)
-  const id = await read($, model)
-  $.ui.toast(`🤖 Model: ${id === null ? secenekAdi(secenek) : modelAdi(id)}`)
+  const u = await read($, usage)
+  if (secenek !== 'default' && !uzunMu(secenek) && (u.contextTokens ?? 0) > 190_000) {
+    $.ui.toast(`Bağlam 200K'yı aşıyor: önce /compact yap ya da ${secenekAdi(secenek)} (1M) seç`)
+    return
+  }
+  await projeModeliYaz($, secenek === 'default' ? null : secenek)
+  const genel = await read($, model)
+  $.ui.toast(
+    secenek === 'default'
+      ? `🤖 Bu proje genel modeli kullanıyor${genel === null ? '' : ` (${modelAdi(genel)})`}`
+      : `🤖 Bu projede: ${modelAdi(projeKimligi ?? secenek)}`,
+  )
 }
 
 const sayi = (n: number) => n.toLocaleString('tr-TR')
@@ -182,6 +280,7 @@ export const register: Register = on => {
     await update($, plugins, p => ({ ...p, running: {}, thisTurn: [] }))
     await update($, isModelMenuOpen, () => false)
     await modelYenile($)
+    await projeYukle($)
     const now = await $.session.usage()
     const simdi = await $.clock.now()
     await update($, usage, u => ({
@@ -202,17 +301,32 @@ export const register: Register = on => {
     return { text: hidden ? 'Maliyet şeridi gizlendi.' : 'Maliyet şeridi gösteriliyor.' }
   })
 
-  // /model ya da /config ile yapılan değişiklikler de şeride yansısın.
+  // /model ya da /config ile model seçen kullanıcı onu ister: projenin seçimi kalkar.
   on('command.run', { command: 'model' }, async ($, e, next) => {
     const r = await next(e)
     await modelYenile($)
+    if (e.args.trim() !== '' && (await read($, projeModeli)) !== null) {
+      await projeModeliYaz($, null)
+      $.ui.toast('🤖 Bu projenin şeritten seçilen modeli kaldırıldı; /model ile seçilen geçerli')
+    }
     return r
-  })
+  }).catch(($, e, next) => next(e))
 
   on('config.set', { key: 'model' }, async ($, e, next) => {
     const r = await next(e)
     await modelYenile($)
+    if (r.deny === undefined && (await read($, projeModeli)) !== null) {
+      await projeModeliYaz($, null)
+    }
     return r
+  }).catch(($, e, next) => next(e))
+
+  // Bu projede seçili model ana döngünün her isteğinde kullanılır; alt ajanlar kendi modelinde kalır.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined && projeKimligi !== undefined && e.model !== projeKimligi) {
+      return yield* next({ ...e, model: projeKimligi })
+    }
+    return yield* next(e)
   })
 
   on('session.measure', async ($, e, next) => {
@@ -315,29 +429,43 @@ export const register: Register = on => {
     const toplam = u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens
     const barGenislik = Math.max(10, Math.min(40, e.props.bodyColumns - 50))
 
+    const proje = await read($, projeModeli)
+    const durumlar = await read($, erisim)
+    const etkin = proje === null ? id : (kimlikCoz(proje) ?? proje)
+    const projeAdi = kok.split('/').filter(Boolean).pop() ?? 'bu proje'
     const modelSatiri = (
       <Box key="model" flexDirection="row">
         <Text>🤖 </Text>
-        <Button
-          key="model-sec"
-          onPress={() => update($, isModelMenuOpen, acik => !acik)}
-        >
-          <Text bold>{id === null ? 'Model' : modelAdi(id)}</Text> {menuAcik ? '▴' : '▾'}
+        <Button key="model-sec" onPress={() => menuyuAc($)}>
+          <Text bold>{etkin === null ? 'Model' : modelAdi(etkin)}</Text>
+          {proje === null ? '' : ' 📌'} {menuAcik ? '▴' : '▾'}
         </Button>
-        {menuAcik ? <Text dimColor>  geçmek istediğin modele tıkla</Text> : null}
+        {menuAcik ? (
+          <Text dimColor>  seçim yalnızca {projeAdi} için geçerli · 🔒 planına dahil değil</Text>
+        ) : proje === null ? null : (
+          <Text dimColor>  {projeAdi} için seçildi</Text>
+        )}
       </Box>
     )
     const modelMenusu = menuAcik && secenekler.length > 0 ? (
       <Box key="model-menu" flexDirection="row" flexWrap="wrap" paddingLeft={3}>
         {secenekler.map(s => {
-          const secili = seciliMi(s, id)
+          const secili = proje === null ? s === 'default' : s === proje
+          const durum = durumlar[s]
+          const isim = secenekAdi(s, id)
           return (
             <Box key={s} marginRight={2}>
               <Button key={`model:${s}`} plain onPress={() => (secili ? update($, isModelMenuOpen, () => false) : modeleGec($, s))}>
-                <Text color={secili ? 'green' : undefined} bold={secili}>
-                  {secili ? '● ' : '○ '}
-                  {secenekAdi(s)}
-                </Text>
+                {durum === 'yok' ? (
+                  <Text dimColor>🔒 {isim}</Text>
+                ) : durum === 'bakiliyor' ? (
+                  <Text dimColor>… {isim}</Text>
+                ) : (
+                  <Text color={secili ? 'green' : undefined} bold={secili}>
+                    {secili ? '● ' : '○ '}
+                    {isim}
+                  </Text>
+                )}
               </Button>
             </Box>
           )

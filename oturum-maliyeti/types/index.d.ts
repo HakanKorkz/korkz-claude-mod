@@ -6,6 +6,9 @@ export type Limit = {
   bitis?: number
 }
 
+/** Bir modelin plandaki durumu: deneme isteği yanıt verdi, vermedi ya da sürüyor. */
+export type Erisim = 'var' | 'yok' | 'bakiliyor'
+
 export type Usage = {
   usd: number | null
   contextTokens: number | null
@@ -51,6 +54,10 @@ declare module 'claude-code' {
       /** `/config` Model satırının seçenekleri (`sonnet`, `opus[1m]`…). */
       modelOptions: string[]
       isModelMenuOpen: boolean
+      /** Bu projede seçili model (`sonnet`, `opus[1m]`); null ise genel ayar. */
+      projeModeli: string | null
+      /** Menüdeki modellerin plandaki durumu. */
+      erisim: Record<string, Erisim>
     }
   }
 }

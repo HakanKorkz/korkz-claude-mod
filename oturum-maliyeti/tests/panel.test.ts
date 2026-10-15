@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { modelAdi, seciliMi } from '../hooks/register'
+import { kimlikCoz, menuSecenekleri, modelAdi, secenekAdi } from '../hooks/register'
 
 test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
@@ -68,44 +68,83 @@ test('açık plugin\'leri ve kullanılanı gösterir', async ($, on) => {
   await ui.unmount()
 })
 
-test('model adına tıklayınca modeller listelenir, birine tıklayınca geçilir', async ($, on) => {
-  let suanki = 'claude-opus-5-5'
-  const setler: unknown[] = []
+test('model seçimi yalnızca bu projede geçerli, plana dahil olmayan kilitli', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
+  let kok = '/home/k/projeB'
+  const store = new Map<string, unknown>()
   const toasts: string[] = []
+  const denenen: string[] = []
   on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
   on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } as never })
-  on('session.model', () => ({ value: suanki }) as never)
-  on('config.list', () => ({ value: [{ key: 'model', label: 'Model', kind: 'choice', value: 'opus', options: ['default', 'sonnet', 'opus', 'opus[1m]'], provider: { plugin: 'engine', tier: 'core' }, isLocked: false }] }) as never)
-  on('config.set', ($, e) => {
-    setler.push(e.value)
-    suanki = e.value === 'sonnet' ? 'claude-sonnet-5-5' : suanki
-    return { value: e.value }
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as never)
+  on('session.root', () => ({ value: kok }) as never)
+  on('session.usage', () => ({ value: { context: { window: 200_000 }, rateLimits: [] } }) as never)
+  on('store.get', ($, e) => ({ value: store.get((e as unknown as { key: string }).key) }) as never)
+  on('store.set', ($, e) => {
+    const { key, value } = e as unknown as { key: string; value: unknown }
+    store.set(key, value)
+    return { value: undefined } as never
   })
-  on('turn.complete', () => ({ text: '' }))
-  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  on('config.list', () => ({ value: [{ key: 'model', label: 'Model', kind: 'choice', value: 'opus', options: ['default', 'sonnet', 'opus', 'fable', 'best', 'opus[1m]', 'opusplan'], provider: { plugin: 'engine', tier: 'core' }, isLocked: false }] }) as never)
+  on('model.complete', ($, e) => {
+    const m = (e as unknown as { model: string }).model
+    denenen.push(m)
+    return { value: m.includes('fable')
+      ? { isAnswered: false, reason: 'api-error', status: 429, error: 'rate_limit', usage: {} }
+      : { isAnswered: true, text: 'ok', usage: {} } } as never
+  })
+  on('command.register', () => ({ value: undefined }) as never)
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('session.start', () => ({ cwd: kok }) as never)
+  const gidenler: string[] = []
+  on('turn.step', async function* ($, e) {
+    gidenler.push(e.model)
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.session.start({ source: 'startup', cwd: kok } as never)
 
-  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120 } } as never)
-  expect(await ui.find({ type: 'Text', text: /Opus 5\.5/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Sonnet/ })).toBeUndefined()
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 140 } } as never)
+  expect(await ui.find({ type: 'Text', text: /^Opus 5\.5$/ })).toBeDefined()
 
   await ui.press({ key: 'model-sec' })
-  expect(await ui.find({ type: 'Text', text: /● Opus$/ })).toBeDefined()
+  expect(denenen.sort()).toEqual(['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5-5[1m]', 'claude-sonnet-5-5'])
+  expect(await ui.find({ type: 'Text', text: /● Genel ayar \(Opus 5\.5\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /🔒 Fable/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /○ Opus \(1M\)/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /○ Varsayılan/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Opus plan|En iyi/ })).toBeUndefined()
 
+  // Kilitli model seçilmez.
+  await ui.press({ key: 'model:fable' })
+  expect(toasts.at(-1)).toContain('planına dahil değil')
+
+  await ui.press({ key: 'model-sec' })
   await ui.press({ key: 'model:sonnet' })
-  expect(setler).toEqual(['sonnet'])
-  expect(toasts.at(-1)).toBe('🤖 Model: Sonnet 5.5')
-  expect(await ui.find({ type: 'Text', text: /Sonnet 5\.5/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /○ Varsayılan/ })).toBeUndefined()
+  expect(toasts.at(-1)).toBe('🤖 Bu projede: Sonnet 5.5')
+  expect(store.get('projeModelleri')).toEqual({ '/home/k/projeB': 'sonnet' })
+  expect(await ui.find({ type: 'Text', text: /^Sonnet 5\.5$/ })).toBeDefined()
   await ui.unmount()
+
+  // Ana döngünün istekleri seçilen modelle gider, alt ajanlarınki değişmez.
+  const adim = (agentId?: string) => ({ turnId: 't', index: 0, model: 'claude-opus-5-5', messageCount: 1, agentId })
+  for await (const _ of $.turn.step(adim())) { /* akış */ }
+  for await (const _ of $.turn.step(adim('alt'))) { /* akış */ }
+  expect(gidenler).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5'])
+
+  // Başka bir projede seçim yok, genel model kullanılır.
+  kok = '/home/k/projeA'
+  await $.session.start({ source: 'startup', cwd: kok } as never)
+  gidenler.length = 0
+  for await (const _ of $.turn.step(adim())) { /* akış */ }
+  expect(gidenler).toEqual(['claude-opus-5-5'])
 })
 
-test('model adları', () => {
+test('model adları ve kimlikleri', () => {
   expect(modelAdi('claude-opus-5-5')).toBe('Opus 5.5')
   expect(modelAdi('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
   expect(modelAdi('claude-fable-5-1[1m]')).toBe('Fable 5.1 (1M)')
-  expect(seciliMi('opus', 'claude-opus-5-5')).toBe(true)
-  expect(seciliMi('opus[1m]', 'claude-opus-5-5')).toBe(false)
-  expect(seciliMi('sonnet', 'claude-opus-5-5')).toBe(false)
+  expect(kimlikCoz('sonnet[1m]')).toBe('claude-sonnet-5-5[1m]')
+  expect(kimlikCoz('opus', { opus: 'claude-opus-6-0' })).toBe('claude-opus-6-0')
+  expect(kimlikCoz('bilinmeyen')).toBeUndefined()
+  expect(secenekAdi('opus[1m]')).toBe('Opus (1M)')
+  expect(menuSecenekleri(['default', 'best', 'haiku', 'opusplan'])).toEqual(['default', 'haiku'])
 })
