@@ -24,7 +24,6 @@ const tools = atom({ plugin: 'oturum-maliyeti', key: 'tools' } as const, {
   calls: {},
   running: {},
   errors: 0,
-  mcpServers: [],
 } as Tools)
 const plugins = atom({ plugin: 'oturum-maliyeti', key: 'plugins' } as const, {
   active: [],
@@ -65,13 +64,6 @@ const ekle = (r: Record<string, number>, k: string, n: number) => {
   return v > 0 ? { ...rest, [k]: v } : rest
 }
 const topla = (r: Record<string, number>) => Object.values(r).reduce((a, b) => a + b, 0)
-
-// Araçları görünen MCP sunucularını bağlı sayar.
-async function mcpYenile($: EngineInterface) {
-  const list = await $.tool.list().catch(() => [])
-  const servers = [...new Set(list.filter(t => t.mcp).map(t => sunucu(t.name)).filter(s => s !== undefined))]
-  await update($, tools, t => ({ ...t, mcpServers: servers.sort() }))
-}
 
 const PENCERE_MS: Record<string, number> = { seven_day: 7 * 24 * 3_600_000 }
 // Pencerenin başından beri ortalama kullanım hızıyla %100'e ulaşılacak an.
@@ -130,7 +122,6 @@ export const register: Register = on => {
     })
     await $.ui.close({ id: ESKI_PANEL })
     await update($, tools, t => ({ ...t, running: {} }))
-    await mcpYenile($)
     await pluginYenile($)
     await update($, plugins, p => ({ ...p, running: {}, thisTurn: [] }))
     const now = await $.session.usage()
@@ -222,7 +213,6 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
-      await mcpYenile($)
       await pluginYenile($)
     }
     const t = e.usage
@@ -289,10 +279,11 @@ export const register: Register = on => {
     }
 
     const pl = await read($, plugins)
-    const gorunen = [...new Set([...pl.active, ...Object.keys(pl.calls), ...Object.keys(pl.running)])]
+    // Yalnızca bu oturumda kullanılan ya da şu an çalışan plugin'ler.
+    const gorunen = [...new Set([...Object.keys(pl.calls), ...Object.keys(pl.running), ...pl.thisTurn])]
     if (gorunen.length > 0) {
       const sira = (ad: string) =>
-        (pl.running[ad] ?? 0) > 0 ? 0 : pl.thisTurn.includes(ad) ? 1 : (pl.calls[ad] ?? 0) > 0 ? 2 : 3
+        (pl.running[ad] ?? 0) > 0 ? 0 : pl.thisTurn.includes(ad) ? 1 : 2
       gorunen.sort((x, y) => sira(x) - sira(y) || x.localeCompare(y))
       satirlar.push(
         <Text key="plugin">
@@ -302,7 +293,7 @@ export const register: Register = on => {
             return (
               <Text key={ad}>
                 {i > 0 ? ' · ' : ''}
-                <Text color={durum === 0 ? 'cyan' : durum === 1 ? 'magenta' : durum === 2 ? 'green' : 'gray'}>
+                <Text color={durum === 0 ? 'cyan' : durum === 1 ? 'magenta' : 'green'}>
                   {durum === 0 ? '⟳' : durum === 1 ? '▶' : '●'}
                 </Text>{' '}
                 {durum <= 1 ? <Text bold>{ad}</Text> : ad}
@@ -314,20 +305,24 @@ export const register: Register = on => {
       )
     }
 
-    if (a.mcpServers.length > 0) {
-      const sunucuCagri: Record<string, number> = {}
-      for (const [k, v] of Object.entries(a.calls)) {
-        const s = sunucu(k)
-        if (s !== undefined) sunucuCagri[s] = (sunucuCagri[s] ?? 0) + v
-      }
-      const aktif = new Set(Object.keys(a.running).map(sunucu).filter(s => s !== undefined))
+    // Yalnızca bu oturumda çağrılan ya da şu an çalışan MCP sunucuları.
+    const sunucuCagri: Record<string, number> = {}
+    for (const [k, v] of Object.entries(a.calls)) {
+      const s = sunucu(k)
+      if (s !== undefined) sunucuCagri[s] = (sunucuCagri[s] ?? 0) + v
+    }
+    const aktif = new Set(Object.keys(a.running).map(sunucu).filter(s => s !== undefined))
+    const kullanilan = [...new Set([...Object.keys(sunucuCagri), ...aktif])].sort(
+      (x, y) => Number(aktif.has(y)) - Number(aktif.has(x)) || x.localeCompare(y),
+    )
+    if (kullanilan.length > 0) {
       satirlar.push(
         <Text key="mcp">
           🔌 MCP{' '}
-          {a.mcpServers.map((s, i) => (
+          {kullanilan.map((s, i) => (
             <Text key={s}>
               {i > 0 ? ' · ' : ''}
-              <Text color={aktif.has(s) ? 'cyan' : (sunucuCagri[s] ?? 0) > 0 ? 'green' : 'gray'}>
+              <Text color={aktif.has(s) ? 'cyan' : 'green'}>
                 {aktif.has(s) ? '⟳' : '●'}
               </Text>{' '}
               {sunucuAdi(s)}

@@ -28,7 +28,7 @@ test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: /5 saatlik .*%23\.5 ↻17:30/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Haftalık .*%92 ↻Pzt 09:00 · tahmini bitiş Per 15:15/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /🔧 Bash 2 · MCP 1 .*toplam 3/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /🔌 MCP ● claude\.ai Gmail 0 · ● context7 1/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /🔌 MCP ● context7 1$/ })).toBeDefined()
     await ui.unmount()
   }
 
@@ -50,7 +50,7 @@ test('haftalık limit bu hızla yetişecekse söyler', async ($, on) => {
 
 test('açık plugin\'leri ve kullanılanı gösterir', async ($, on) => {
   on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
-  on('settings.read', () => ({ value: { enabledPlugins: { 'design@resmi': true, 'context7@resmi': true, 'kapali@x': false } } }) as never)
+  on('settings.read', () => ({ value: { enabledPlugins: { 'design@resmi': true, 'context7@resmi': true, 'stitch@resmi': true, 'kapali@x': false } } }) as never)
   on('tool.list', () => ({ value: [] }) as never)
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', () => ({ result: {}, text: 'ok' }) as never)
@@ -63,5 +63,6 @@ test('açık plugin\'leri ve kullanılanı gösterir', async ($, on) => {
   const satir = (await ui.findAll({ type: 'Text', text: /🧩 Plugin/ }))[0]?.text ?? ''
   expect(satir).toMatch(/▶ context7 1 · ▶ design 2/)
   expect(satir).not.toContain('kapali')
+  expect(satir).not.toContain('stitch')
   await ui.unmount()
 })

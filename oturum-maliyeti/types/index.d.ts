@@ -26,8 +26,6 @@ export type Tools = {
   running: Record<string, number>
   /** Hata ya da ret ile biten çağrılar. */
   errors: number
-  /** Araçları görünen (bağlı) MCP sunucuları. */
-  mcpServers: string[]
 }
 
 export type Plugins = {
