@@ -1,0 +1,8 @@
+{
+  "name": "oto-format",
+  "version": "0.1.0",
+  "description": "Edit/Write sonrası PHP dosyalarını pint, JS/TS dosyalarını prettier ile biçimlendirir",
+  "author": {
+    "name": "HakanKorkz"
+  }
+}
