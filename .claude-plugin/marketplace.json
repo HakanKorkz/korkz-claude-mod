@@ -3,8 +3,10 @@
   "owner": { "name": "HakanKorkz" },
   "plugins": [
     { "name": "oturum-maliyeti", "source": "./oturum-maliyeti", "description": "Token, maliyet, limitler, araç ve MCP kullanımını prompt üstündeki bir şeritte gösterir" },
-    { "name": "tehlike-kalkani", "source": "./tehlike-kalkani", "description": "Tehlikeli Bash komutlarını çalışmadan engeller" },
+    { "name": "tehlike-kalkani", "source": "./tehlike-kalkani", "description": "Tehlikeli Bash komutlarını engeller, riskli olanlarda onay ister" },
     { "name": "turkce-cevap", "source": "./turkce-cevap", "description": "System prompt'a Türkçe cevap talimatı ekler" },
-    { "name": "is-bitti", "source": "./is-bitti", "description": "Uzun süren bir iş bitince ses çalar, masaüstü bildirimi ve toast gösterir" }
+    { "name": "is-bitti", "source": "./is-bitti", "description": "Uzun süren bir iş bitince ya da Claude onay beklerken ses çalar, masaüstü bildirimi ve toast gösterir" },
+    { "name": "gizli-koruma", "source": "./gizli-koruma", "description": ".env ve anahtar dosyalarının okunmasını ve commit'e girmesini engeller, diff'teki API anahtarlarında onay ister" },
+    { "name": "oto-format", "source": "./oto-format", "description": "Edit/Write sonrası PHP dosyalarını pint, JS/TS dosyalarını prettier ile biçimlendirir" }
   ]
 }
