@@ -41,6 +41,16 @@ export type Plugins = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'oturum-maliyeti': { usage: Usage; isHidden: boolean; tools: Tools; plugins: Plugins }
+    'oturum-maliyeti': {
+      usage: Usage
+      isHidden: boolean
+      tools: Tools
+      plugins: Plugins
+      /** Oturumun şu anki modeli (`claude-opus-5-5`). */
+      model: string | null
+      /** `/config` Model satırının seçenekleri (`sonnet`, `opus[1m]`…). */
+      modelOptions: string[]
+      isModelMenuOpen: boolean
+    }
   }
 }

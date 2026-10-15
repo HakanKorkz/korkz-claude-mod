@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { modelAdi, seciliMi } from '../hooks/register'
 
 test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
@@ -65,4 +66,46 @@ test('açık plugin\'leri ve kullanılanı gösterir', async ($, on) => {
   expect(satir).not.toContain('kapali')
   expect(satir).not.toContain('stitch')
   await ui.unmount()
+})
+
+test('model adına tıklayınca modeller listelenir, birine tıklayınca geçilir', async ($, on) => {
+  let suanki = 'claude-opus-5-5'
+  const setler: unknown[] = []
+  const toasts: string[] = []
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } as never })
+  on('session.model', () => ({ value: suanki }) as never)
+  on('config.list', () => ({ value: [{ key: 'model', label: 'Model', kind: 'choice', value: 'opus', options: ['default', 'sonnet', 'opus', 'opus[1m]'], provider: { plugin: 'engine', tier: 'core' }, isLocked: false }] }) as never)
+  on('config.set', ($, e) => {
+    setler.push(e.value)
+    suanki = e.value === 'sonnet' ? 'claude-sonnet-5-5' : suanki
+    return { value: e.value }
+  })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120 } } as never)
+  expect(await ui.find({ type: 'Text', text: /Opus 5\.5/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Sonnet/ })).toBeUndefined()
+
+  await ui.press({ key: 'model-sec' })
+  expect(await ui.find({ type: 'Text', text: /● Opus$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /○ Opus \(1M\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /○ Varsayılan/ })).toBeDefined()
+
+  await ui.press({ key: 'model:sonnet' })
+  expect(setler).toEqual(['sonnet'])
+  expect(toasts.at(-1)).toBe('🤖 Model: Sonnet 5.5')
+  expect(await ui.find({ type: 'Text', text: /Sonnet 5\.5/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /○ Varsayılan/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('model adları', () => {
+  expect(modelAdi('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelAdi('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+  expect(modelAdi('claude-fable-5-1[1m]')).toBe('Fable 5.1 (1M)')
+  expect(seciliMi('opus', 'claude-opus-5-5')).toBe(true)
+  expect(seciliMi('opus[1m]', 'claude-opus-5-5')).toBe(false)
+  expect(seciliMi('sonnet', 'claude-opus-5-5')).toBe(false)
 })

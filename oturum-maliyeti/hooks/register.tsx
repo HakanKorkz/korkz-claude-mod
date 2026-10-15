@@ -32,6 +32,62 @@ const plugins = atom({ plugin: 'oturum-maliyeti', key: 'plugins' } as const, {
   thisTurn: [],
 } as Plugins)
 const isHidden = atom({ plugin: 'oturum-maliyeti', key: 'isHidden' } as const, false)
+const model = atom({ plugin: 'oturum-maliyeti', key: 'model' } as const, null as string | null)
+const modelOptions = atom({ plugin: 'oturum-maliyeti', key: 'modelOptions' } as const, [] as string[])
+const isModelMenuOpen = atom({ plugin: 'oturum-maliyeti', key: 'isModelMenuOpen' } as const, false)
+
+// `claude-opus-5-5[1m]` → `Opus 5.5 (1M)`; tarih ekleri (`-20251001`) atılır.
+export const modelAdi = (id: string) => {
+  const uzun = /\[1m\]$/i.test(id)
+  const [aile = id, ...surum] = id
+    .replace(/\[1m\]$/i, '')
+    .replace(/^claude-/, '')
+    .split('-')
+    .filter(p => !/^\d{8}$/.test(p))
+  const ad = `${aile.charAt(0).toUpperCase()}${aile.slice(1)}${surum.length > 0 ? ` ${surum.join('.')}` : ''}`
+
+  return uzun ? `${ad} (1M)` : ad
+}
+
+// Menüdeki seçeneklerin adları; diğerleri modelAdi ile yazılır.
+const SECENEK_ADI: Record<string, string> = {
+  default: 'Varsayılan',
+  best: 'En iyi',
+  opusplan: 'Opus plan',
+}
+export const secenekAdi = (s: string) => SECENEK_ADI[s] ?? modelAdi(s)
+
+// Şu anki model id'si bu seçeneğe mi karşılık geliyor (`opus` ↔ `claude-opus-5-5`).
+export const seciliMi = (secenek: string, id: string | null) => {
+  if (id === null) return false
+  const uzun = (x: string) => /\[1m\]$/i.test(x)
+  const aile = (x: string) => x.replace(/\[1m\]$/i, '').replace(/^claude-/, '').split('-')[0]
+
+  return secenek === id || (aile(secenek) === aile(id) && uzun(secenek) === uzun(id))
+}
+
+async function modelYenile($: EngineInterface) {
+  const [id, satir] = await Promise.all([
+    $.session.model().catch(() => null),
+    $.config.list().then(r => r.find(x => x.key === 'model')).catch(() => undefined),
+  ])
+  await update($, model, () => id)
+  if (satir?.options !== undefined && !satir.isLocked) {
+    await update($, modelOptions, () => [...(satir.options ?? [])])
+  }
+}
+
+async function modeleGec($: EngineInterface, secenek: string) {
+  await update($, isModelMenuOpen, () => false)
+  const r = await $.config.set({ key: 'model', value: secenek }).catch((h: unknown) => ({ deny: String(h) }))
+  if (r.deny !== undefined) {
+    $.ui.toast(`Model değiştirilemedi: ${r.deny}`)
+    return
+  }
+  await modelYenile($)
+  const id = await read($, model)
+  $.ui.toast(`🤖 Model: ${id === null ? secenekAdi(secenek) : modelAdi(id)}`)
+}
 
 const sayi = (n: number) => n.toLocaleString('tr-TR')
 const kisa = (n: number) =>
@@ -124,6 +180,8 @@ export const register: Register = on => {
     await update($, tools, t => ({ ...t, running: {} }))
     await pluginYenile($)
     await update($, plugins, p => ({ ...p, running: {}, thisTurn: [] }))
+    await update($, isModelMenuOpen, () => false)
+    await modelYenile($)
     const now = await $.session.usage()
     const simdi = await $.clock.now()
     await update($, usage, u => ({
@@ -142,6 +200,19 @@ export const register: Register = on => {
     const hidden = await update($, isHidden, h => !h)
 
     return { text: hidden ? 'Maliyet şeridi gizlendi.' : 'Maliyet şeridi gösteriliyor.' }
+  })
+
+  // /model ya da /config ile yapılan değişiklikler de şeride yansısın.
+  on('command.run', { command: 'model' }, async ($, e, next) => {
+    const r = await next(e)
+    await modelYenile($)
+    return r
+  })
+
+  on('config.set', { key: 'model' }, async ($, e, next) => {
+    const r = await next(e)
+    await modelYenile($)
+    return r
   })
 
   on('session.measure', async ($, e, next) => {
@@ -214,6 +285,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       await pluginYenile($)
+      await modelYenile($)
     }
     const t = e.usage
     if (e.agentId === undefined && t !== undefined) {
@@ -235,12 +307,47 @@ export const register: Register = on => {
       return next(e)
     }
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const u = await read($, usage)
+    const id = await read($, model)
+    const secenekler = await read($, modelOptions)
+    const menuAcik = await read($, isModelMenuOpen)
     const toplam = u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens
     const barGenislik = Math.max(10, Math.min(40, e.props.bodyColumns - 50))
 
+    const modelSatiri = (
+      <Box key="model" flexDirection="row">
+        <Text>🤖 </Text>
+        <Button
+          key="model-sec"
+          onPress={() => update($, isModelMenuOpen, acik => !acik)}
+        >
+          <Text bold>{id === null ? 'Model' : modelAdi(id)}</Text> {menuAcik ? '▴' : '▾'}
+        </Button>
+        {menuAcik ? <Text dimColor>  geçmek istediğin modele tıkla</Text> : null}
+      </Box>
+    )
+    const modelMenusu = menuAcik && secenekler.length > 0 ? (
+      <Box key="model-menu" flexDirection="row" flexWrap="wrap" paddingLeft={3}>
+        {secenekler.map(s => {
+          const secili = seciliMi(s, id)
+          return (
+            <Box key={s} marginRight={2}>
+              <Button key={`model:${s}`} plain onPress={() => (secili ? update($, isModelMenuOpen, () => false) : modeleGec($, s))}>
+                <Text color={secili ? 'green' : undefined} bold={secili}>
+                  {secili ? '● ' : '○ '}
+                  {secenekAdi(s)}
+                </Text>
+              </Button>
+            </Box>
+          )
+        })}
+      </Box>
+    ) : null
+
     const satirlar = [
+      modelSatiri,
+      ...(modelMenusu === null ? [] : [modelMenusu]),
       <Text key="ozet">
         <Text bold>💰 {u.usd === null ? '—' : `$${u.usd.toFixed(4)}`}</Text>
         {'   '}Bağlam {cubuk(u.contextPercent ?? 0, barGenislik)}{' '}
