@@ -1,0 +1,8 @@
+{
+  "name": "is-bitti",
+  "version": "0.1.0",
+  "description": "Uzun süren bir iş bitince toast ve bildirim gösterir",
+  "author": {
+    "name": "HakanKorkz"
+  }
+}

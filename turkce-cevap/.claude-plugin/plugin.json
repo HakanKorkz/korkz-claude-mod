@@ -1,0 +1,8 @@
+{
+  "name": "turkce-cevap",
+  "version": "0.1.0",
+  "description": "System prompt'a Türkçe cevap talimatı ekler",
+  "author": {
+    "name": "HakanKorkz"
+  }
+}
