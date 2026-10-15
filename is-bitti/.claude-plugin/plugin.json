@@ -1,7 +1,7 @@
 {
   "name": "is-bitti",
-  "version": "0.1.0",
-  "description": "Uzun süren bir iş bitince toast ve bildirim gösterir",
+  "version": "0.2.0",
+  "description": "Uzun süren bir iş bitince ses çalar, masaüstü bildirimi ve toast gösterir",
   "author": {
     "name": "HakanKorkz"
   }

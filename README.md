@@ -7,7 +7,7 @@
 | **oturum-maliyeti** | Prompt'un üstünde bir şerit: oturum maliyeti, bağlam doluluğu, token sayıları, araç kullanımı, bağlı MCP sunucuları, 5 saatlik ve haftalık limitler. `/maliyet` ile gizlenir/gösterilir. |
 | **tehlike-kalkani** | `rm -rf /`, `mkfs`, `curl … \| bash`, `git push --force`, `git reset --hard`, `DROP DATABASE`, `artisan migrate:fresh` gibi tehlikeli Bash komutlarını çalışmadan engeller. |
 | **turkce-cevap** | System prompt'a "her zaman Türkçe yanıt ver" talimatı ekler. |
-| **is-bitti** | 60 saniyeden uzun süren bir iş bitince toast ve masaüstü bildirimi gösterir. |
+| **is-bitti** | 60 saniyeden uzun süren bir iş bitince ses çalar (`paplay`, `pw-play`, `canberra-gtk-play`; macOS'ta `afplay`), masaüstü bildirimi (`notify-send`; macOS'ta `osascript`) ve toast gösterir. |
 
 ## Kurulum
 
@@ -30,5 +30,4 @@ claude plugin install oturum-maliyeti --marketplace HakanKorkz/korkz-claude-mod
 
 ## Notlar
 
-- `is-bitti` Linux'ta ses çalmaz; toast ve `preferredNotifChannel` ayarındaki bildirim kanalını kullanır.
 - `turkce-cevap`, Claude Code'u kurum olarak yöneten organizasyonlarda yalnızca yönetilen ayarlarda listelenirse çalışır.

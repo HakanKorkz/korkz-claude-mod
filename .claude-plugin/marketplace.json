@@ -5,6 +5,6 @@
     { "name": "oturum-maliyeti", "source": "./oturum-maliyeti", "description": "Token, maliyet, limitler, araç ve MCP kullanımını prompt üstündeki bir şeritte gösterir" },
     { "name": "tehlike-kalkani", "source": "./tehlike-kalkani", "description": "Tehlikeli Bash komutlarını çalışmadan engeller" },
     { "name": "turkce-cevap", "source": "./turkce-cevap", "description": "System prompt'a Türkçe cevap talimatı ekler" },
-    { "name": "is-bitti", "source": "./is-bitti", "description": "Uzun süren bir iş bitince toast ve bildirim gösterir" }
+    { "name": "is-bitti", "source": "./is-bitti", "description": "Uzun süren bir iş bitince ses çalar, masaüstü bildirimi ve toast gösterir" }
   ]
 }
