@@ -30,8 +30,19 @@ export type Tools = {
   mcpServers: string[]
 }
 
+export type Plugins = {
+  /** Ayarlarda açık olan plugin'ler (`enabledPlugins`), `@marketplace` olmadan. */
+  active: string[]
+  /** Plugin'in araç, skill ya da ajan kullanım sayısı. */
+  calls: Record<string, number>
+  /** Şu an çalışan kullanım sayısı. */
+  running: Record<string, number>
+  /** Bu turda kullanılan plugin'ler. */
+  thisTurn: string[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'oturum-maliyeti': { usage: Usage; isHidden: boolean; tools: Tools }
+    'oturum-maliyeti': { usage: Usage; isHidden: boolean; tools: Tools; plugins: Plugins }
   }
 }

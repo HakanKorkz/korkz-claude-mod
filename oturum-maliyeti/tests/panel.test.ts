@@ -47,3 +47,21 @@ test('haftalık limit bu hızla yetişecekse söyler', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /Haftalık .*%20 ↻Pzt 09:00 · bu hızla yetişir/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('açık plugin\'leri ve kullanılanı gösterir', async ($, on) => {
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('settings.read', () => ({ value: { enabledPlugins: { 'design@resmi': true, 'context7@resmi': true, 'kapali@x': false } } }) as never)
+  on('tool.list', () => ({ value: [] }) as never)
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', () => ({ result: {}, text: 'ok' }) as never)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't0', reason: 'answer' })
+  await $.tool.call({ tool: 'mcp__plugin_context7_context7__query-docs', libraryId: 'x', query: 'y' } as never)
+  await $.tool.call({ tool: 'Skill', skill: 'design:ux-copy' } as never)
+  await $.tool.call({ tool: 'Skill', skill: 'design:design-critique' } as never)
+
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 160 } } as never)
+  const satir = (await ui.findAll({ type: 'Text', text: /🧩 Plugin/ }))[0]?.text ?? ''
+  expect(satir).toMatch(/▶ context7 1 · ▶ design 2/)
+  expect(satir).not.toContain('kapali')
+  await ui.unmount()
+})

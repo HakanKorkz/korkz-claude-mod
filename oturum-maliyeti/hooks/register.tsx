@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Limit, Tools, Usage } from '../types'
+import type { Limit, Plugins, Tools, Usage } from '../types'
 
 // Eski sürümün açtığı yan panel; açık kaldıysa kapatılır.
 const ESKI_PANEL = 'oturum-maliyeti'
@@ -26,6 +26,12 @@ const tools = atom({ plugin: 'oturum-maliyeti', key: 'tools' } as const, {
   errors: 0,
   mcpServers: [],
 } as Tools)
+const plugins = atom({ plugin: 'oturum-maliyeti', key: 'plugins' } as const, {
+  active: [],
+  calls: {},
+  running: {},
+  thisTurn: [],
+} as Plugins)
 const isHidden = atom({ plugin: 'oturum-maliyeti', key: 'isHidden' } as const, false)
 
 const sayi = (n: number) => n.toLocaleString('tr-TR')
@@ -62,7 +68,7 @@ const topla = (r: Record<string, number>) => Object.values(r).reduce((a, b) => a
 
 // Araçları görünen MCP sunucularını bağlı sayar.
 async function mcpYenile($: EngineInterface) {
-  const list = await $.tool.list()
+  const list = await $.tool.list().catch(() => [])
   const servers = [...new Set(list.filter(t => t.mcp).map(t => sunucu(t.name)).filter(s => s !== undefined))]
   await update($, tools, t => ({ ...t, mcpServers: servers.sort() }))
 }
@@ -83,6 +89,31 @@ const tarih = (ms: number) => {
   const d = new Date(ms)
   return `${d.toLocaleDateString('tr-TR', { weekday: 'short' })} ${d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
 }
+// Ayarlardaki açık plugin'ler: `{ "design@marketplace": true }` → `design`.
+async function pluginYenile($: EngineInterface) {
+  const { enabledPlugins } = await $.settings.read().catch(() => ({ enabledPlugins: undefined }))
+  const acik =
+    enabledPlugins !== null && typeof enabledPlugins === 'object'
+      ? Object.entries(enabledPlugins as Record<string, unknown>)
+          .filter(([, v]) => v === true)
+          .map(([k]) => k.split('@')[0] ?? k)
+      : []
+  await update($, plugins, p => ({ ...p, active: [...new Set(acik)].sort() }))
+}
+
+// Bir araç çağrısının hangi plugin'den geldiği: plugin MCP sunucusu
+// (`mcp__plugin_<ad>_<sunucu>__araç`), `<ad>:skill` ya da `<ad>:ajan`.
+const pluginBul = (tool: string, girdi: Record<string, unknown>, acik: readonly string[]) => {
+  const s = sunucu(tool)
+  if (s !== undefined && s.startsWith('plugin_')) {
+    const ad = acik.find(p => s.startsWith(`plugin_${p.replace(/[^A-Za-z0-9-]/g, '_')}_`))
+    return ad ?? s.slice('plugin_'.length).split('_')[0]
+  }
+  const ad = tool === 'Skill' ? girdi.skill : tool === 'Agent' ? girdi.subagent_type : undefined
+  return typeof ad === 'string' && ad.includes(':') ? ad.split(':')[0] : undefined
+}
+const turaEkle = (list: readonly string[], ad: string) => (list.includes(ad) ? [...list] : [...list, ad])
+
 const limitler = (list: readonly Limit[], now: number): Limit[] =>
   list.map(l => ({
     kind: l.kind,
@@ -100,6 +131,8 @@ export const register: Register = on => {
     await $.ui.close({ id: ESKI_PANEL })
     await update($, tools, t => ({ ...t, running: {} }))
     await mcpYenile($)
+    await pluginYenile($)
+    await update($, plugins, p => ({ ...p, running: {}, thisTurn: [] }))
     const now = await $.session.usage()
     const simdi = await $.clock.now()
     await update($, usage, u => ({
@@ -134,8 +167,36 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('prompt.submit', async ($, e, next) => {
+    if (e.command === undefined) {
+      await update($, plugins, p => ({ ...p, thisTurn: [] }))
+    }
+
+    return next(e)
+  })
+
+  // Slash komutuyla çağrılan plugin skill'leri; Skill aracıyla gelenler tool.call'da sayılır.
+  let skillAraci = 0
+  on('skill.prompt', async ($, e, next) => {
+    const ad = e.pluginName
+    if (ad !== undefined && skillAraci === 0) {
+      await update($, plugins, p => ({ ...p, calls: ekle(p.calls, ad, 1), thisTurn: turaEkle(p.thisTurn, ad) }))
+    }
+
+    return next(e)
+  })
+
   on('tool.call', async ($, e, next) => {
     await update($, tools, t => ({ ...t, running: ekle(t.running, e.tool, 1) }))
+    const plugin = pluginBul(e.tool, e as unknown as Record<string, unknown>, (await read($, plugins)).active)
+    if (e.tool === 'Skill') skillAraci += 1
+    if (plugin !== undefined) {
+      await update($, plugins, p => ({
+        ...p,
+        running: ekle(p.running, plugin, 1),
+        thisTurn: turaEkle(p.thisTurn, plugin),
+      }))
+    }
     let hata = true
     try {
       const ran = await next(e)
@@ -148,12 +209,21 @@ export const register: Register = on => {
         calls: ekle(t.calls, e.tool, 1),
         errors: t.errors + (hata ? 1 : 0),
       }))
+      if (e.tool === 'Skill') skillAraci -= 1
+      if (plugin !== undefined) {
+        await update($, plugins, p => ({
+          ...p,
+          running: ekle(p.running, plugin, -1),
+          calls: ekle(p.calls, plugin, 1),
+        }))
+      }
     }
   })
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       await mcpYenile($)
+      await pluginYenile($)
     }
     const t = e.usage
     if (e.agentId === undefined && t !== undefined) {
@@ -214,6 +284,32 @@ export const register: Register = on => {
             {a.errors > 0 ? `, ${a.errors} hata` : ''})
           </Text>
           {calisan > 0 ? <Text color="cyan">  ⟳ {calisanlar.join(', ')}</Text> : ''}
+        </Text>,
+      )
+    }
+
+    const pl = await read($, plugins)
+    const gorunen = [...new Set([...pl.active, ...Object.keys(pl.calls), ...Object.keys(pl.running)])]
+    if (gorunen.length > 0) {
+      const sira = (ad: string) =>
+        (pl.running[ad] ?? 0) > 0 ? 0 : pl.thisTurn.includes(ad) ? 1 : (pl.calls[ad] ?? 0) > 0 ? 2 : 3
+      gorunen.sort((x, y) => sira(x) - sira(y) || x.localeCompare(y))
+      satirlar.push(
+        <Text key="plugin">
+          🧩 Plugin{' '}
+          {gorunen.map((ad, i) => {
+            const durum = sira(ad)
+            return (
+              <Text key={ad}>
+                {i > 0 ? ' · ' : ''}
+                <Text color={durum === 0 ? 'cyan' : durum === 1 ? 'magenta' : durum === 2 ? 'green' : 'gray'}>
+                  {durum === 0 ? '⟳' : durum === 1 ? '▶' : '●'}
+                </Text>{' '}
+                {durum <= 1 ? <Text bold>{ad}</Text> : ad}
+                <Text dimColor> {pl.calls[ad] ?? 0}</Text>
+              </Text>
+            )
+          })}
         </Text>,
       )
     }
