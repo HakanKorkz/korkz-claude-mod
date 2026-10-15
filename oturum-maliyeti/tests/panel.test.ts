@@ -1,6 +1,7 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
   on('turn.complete', () => ({ text: '' }))
   on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
   on('session.measure', ($, e) => ({ changed: e.changed }))
@@ -25,7 +26,7 @@ test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: /%25/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Tur 1 ·/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5 saatlik .*%23\.5 ↻17:30/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Haftalık .*%92 ↻Pzt 09:00/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Haftalık .*%92 ↻Pzt 09:00 · tahmini bitiş Per 15:15/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /🔧 Bash 2 · MCP 1 .*toplam 3/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /🔌 MCP ● claude\.ai Gmail 0 · ● context7 1/ })).toBeDefined()
     await ui.unmount()
@@ -35,4 +36,14 @@ test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
   const gizli = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120 } } as never)
   expect(await gizli.find({ type: 'Text', text: /Bağlam/ })).toBeUndefined()
   await gizli.unmount()
+})
+
+test('haftalık limit bu hızla yetişecekse söyler', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [{ kind: 'seven_day', percentUsed: 20, resetsAt: '2026-10-19T06:00:00Z' }], changed: ['rateLimits'] })
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120 } } as never)
+  expect(await ui.find({ type: 'Text', text: /Haftalık .*%20 ↻Pzt 09:00 · bu hızla yetişir/ })).toBeDefined()
+  await ui.unmount()
 })

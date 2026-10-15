@@ -1,4 +1,10 @@
-export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
+export type Limit = {
+  kind: string
+  percentUsed: number
+  resetsAt?: string
+  /** Bu hızla %100'e ulaşılacak an (epoch ms); sıfırlanmadan sonraysa yetişir. */
+  bitis?: number
+}
 
 export type Usage = {
   usd: number | null

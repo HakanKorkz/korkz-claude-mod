@@ -67,8 +67,29 @@ async function mcpYenile($: EngineInterface) {
   await update($, tools, t => ({ ...t, mcpServers: servers.sort() }))
 }
 
-const limitler = (list: readonly Limit[]): Limit[] =>
-  list.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt }))
+const PENCERE_MS: Record<string, number> = { seven_day: 7 * 24 * 3_600_000 }
+// Pencerenin başından beri ortalama kullanım hızıyla %100'e ulaşılacak an.
+const bitisTahmini = (l: Limit, now: number): number | undefined => {
+  const pencere = PENCERE_MS[l.kind]
+  const reset = l.resetsAt === undefined ? NaN : new Date(l.resetsAt).getTime()
+  if (pencere === undefined || Number.isNaN(reset) || l.percentUsed <= 0) return undefined
+  const gecen = now - (reset - pencere)
+  if (gecen < 3_600_000) return undefined
+  if (l.percentUsed >= 100) return now
+
+  return Math.round(now + ((100 - l.percentUsed) / l.percentUsed) * gecen)
+}
+const tarih = (ms: number) => {
+  const d = new Date(ms)
+  return `${d.toLocaleDateString('tr-TR', { weekday: 'short' })} ${d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
+}
+const limitler = (list: readonly Limit[], now: number): Limit[] =>
+  list.map(l => ({
+    kind: l.kind,
+    percentUsed: l.percentUsed,
+    resetsAt: l.resetsAt,
+    bitis: bitisTahmini(l, now),
+  }))
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -80,13 +101,14 @@ export const register: Register = on => {
     await update($, tools, t => ({ ...t, running: {} }))
     await mcpYenile($)
     const now = await $.session.usage()
+    const simdi = await $.clock.now()
     await update($, usage, u => ({
       ...u,
       usd: now.cost?.usd ?? u.usd,
       contextTokens: now.context.tokens ?? u.contextTokens,
       contextWindow: now.context.window,
       contextPercent: now.context.percent ?? u.contextPercent,
-      limits: now.rateLimits.length > 0 ? limitler(now.rateLimits) : u.limits,
+      limits: now.rateLimits.length > 0 ? limitler(now.rateLimits, simdi) : u.limits,
     }))
 
     return next(e)
@@ -99,13 +121,14 @@ export const register: Register = on => {
   })
 
   on('session.measure', async ($, e, next) => {
+    const simdi = await $.clock.now()
     await update($, usage, u => ({
       ...u,
       usd: e.cost?.usd ?? u.usd,
       contextTokens: e.context.tokens ?? u.contextTokens,
       contextWindow: e.context.window,
       contextPercent: e.context.percent ?? u.contextPercent,
-      limits: e.rateLimits.length > 0 ? limitler(e.rateLimits) : u.limits,
+      limits: e.rateLimits.length > 0 ? limitler(e.rateLimits, simdi) : u.limits,
     }))
 
     return next(e)
@@ -231,6 +254,13 @@ export const register: Register = on => {
                 {cubuk(l.percentUsed, limitBar)} %{l.percentUsed}
               </Text>
               <Text dimColor>{sifirlanma(l.resetsAt, l.kind)}</Text>
+              {l.bitis === undefined ? (
+                ''
+              ) : l.resetsAt !== undefined && l.bitis >= new Date(l.resetsAt).getTime() ? (
+                <Text color="green"> · bu hızla yetişir</Text>
+              ) : (
+                <Text color={l.percentUsed >= 70 ? 'red' : 'yellow'}> · tahmini bitiş {tarih(l.bitis)}</Text>
+              )}
             </Text>
           ))}
         </Text>,

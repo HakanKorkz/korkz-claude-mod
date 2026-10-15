@@ -11,3 +11,12 @@ test('system prompt sonuna Türkçe talimatı ekler', async ($, on) => {
   expect(last?.scope).toBe('session')
   expect(last?.text).toContain('Türkçe')
 })
+
+test('her prompt’a görünmeyen Türkçe hatırlatma ekler', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text, context: e.context }))
+  const r = await $.prompt.submit({ text: 'fix the bug please', wait: false } as never)
+  expect(r.drop).toBeUndefined()
+  expect(r.text).toBe('fix the bug please')
+  expect(r.context?.length).toBe(1)
+  expect(r.context?.[0]).toContain('Türkçe')
+})
