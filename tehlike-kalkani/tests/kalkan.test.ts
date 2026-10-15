@@ -9,8 +9,21 @@ const TEHLIKELI = [
   'git reset --hard HEAD~3',
   'dd if=/dev/zero of=/dev/sda',
   'php artisan migrate:fresh',
+  'rm -rf "/"',
+  'bash -c "rm -rf / --no-preserve-root"',
+  'mysql -e "DROP DATABASE app"',
+  "ssh sunucu 'sudo reboot now'",
+  'bash <<EOF\nmkfs.ext4 /dev/sdb1\nEOF',
 ]
-const GUVENLI = ['ls -la', 'rm -rf node_modules', 'git push origin main', 'git status']
+const GUVENLI = [
+  'ls -la',
+  'rm -rf node_modules',
+  'git push origin main',
+  'git status',
+  'cat > README.md <<\'EOF\'\n`rm -rf /`, `mkfs` ve `git push --force` engellenir.\nEOF',
+  'git commit -m "kalkan: git reset --hard ve shutdown kuralları"',
+  'echo "mkfs ile disk biçimlendirilir"',
+]
 
 test('tehlikeli komutları engeller, güvenlileri geçirir', async ($, on) => {
   let ran = 0

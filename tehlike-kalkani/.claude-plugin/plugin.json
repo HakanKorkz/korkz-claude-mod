@@ -1,6 +1,6 @@
 {
   "name": "tehlike-kalkani",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tehlikeli Bash komutlarını çalışmadan engeller",
   "author": {
     "name": "HakanKorkz"

@@ -20,8 +20,27 @@ export const KURALLAR: readonly Kural[] = [
   { ad: 'Laravel veritabanını sıfırlama', desen: /\bartisan\s+(migrate:fresh|migrate:reset|db:wipe)\b/ },
 ]
 
-export const tehlike = (komut: string): Kural | undefined =>
-  KURALLAR.find(k => k.desen.test(komut))
+// Metni komut olarak çalıştıranlar: bunların yazıları da taranır.
+const CALISTIRAN = /\b(ba|z|da|k)?sh\b|\beval\b|\bssh\b|\bxargs\b|\bsource\b|\bmysql\b|\bmariadb\b|\bpsql\b|\bsqlite3\b|\bpython3?\b|\bnode\b|\bperl\b|\bruby\b|\bphp\b/
+
+// Heredoc gövdelerini ve boşluk içeren tırnaklı yazıları çıkarır (README, commit
+// mesajı, echo metni); `rm -rf "/"` gibi tek kelimelik tırnaklar yerinde kalır.
+const yazilariAt = (komut: string) => {
+  const govdesiz = komut.replace(
+    /^([^\n]*<<-?\s*(['"]?)(\w+)\2[^\n]*)\n[\s\S]*?\n[ \t]*\3[ \t]*(?=\n|$)/gm,
+    (tum, baslik: string) => (CALISTIRAN.test(baslik) ? tum : baslik),
+  )
+
+  return CALISTIRAN.test(govdesiz)
+    ? govdesiz
+    : govdesiz.replace(/'[^']*\s[^']*'|"(?:[^"\\]|\\.)*\s(?:[^"\\]|\\.)*"/g, "''")
+}
+
+export const tehlike = (komut: string): Kural | undefined => {
+  const taranan = yazilariAt(komut)
+
+  return KURALLAR.find(k => k.desen.test(taranan))
+}
 
 export const register: Register = on => {
   on('tool.call', { tool: 'Bash' }, ($, e, next) => {
