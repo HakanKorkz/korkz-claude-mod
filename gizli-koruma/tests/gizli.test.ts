@@ -7,7 +7,7 @@ const GH = 'ghp' + '_' + 'a'.repeat(36)
 const OZEL = '-----BEGIN ' + 'RSA PRIVATE KEY-----'
 
 test('gizli dosya adları', () => {
-  for (const y of ['.env', '/proje/.env.production', 'storage/oauth-private.key', '~/.ssh/id_ed25519', 'cert.pem', '"/x/.env"', 'auth.json']) {
+  for (const y of ['.env', '~/.claude/.credentials.json', '/proje/.env.production', 'storage/oauth-private.key', '~/.ssh/id_ed25519', 'cert.pem', '"/x/.env"', 'auth.json']) {
     expect(gizliMi(y)).toBe(true)
   }
   for (const y of ['.env.example', 'id_ed25519.pub', 'environment.ts', 'src/env.ts', 'package.json', 'keys.ts']) {

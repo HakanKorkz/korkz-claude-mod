@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 // Gizli dosyalar: .env, anahtarlar, sertifika depoları, bulut kimlik bilgileri.
-const GIZLI_AD = /^(\.env(\..+)?|.+\.(pem|key|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519)|credentials(\.json)?|\.netrc|\.pgpass|auth\.json|service-account.*\.json)$/i
+const GIZLI_AD = /^(\.env(\..+)?|.+\.(pem|key|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519)|\.?credentials(\.json)?|\.netrc|\.pgpass|auth\.json|service-account.*\.json)$/i
 // Örnek ve şablon dosyaları paylaşılmak içindir.
 const ORNEK = /\.(example|sample|dist|template|defaults?|pub)$/i
 

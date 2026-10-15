@@ -1,6 +1,6 @@
 {
   "name": "gizli-koruma",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": ".env ve anahtar dosyalarının okunmasını ve commit'e girmesini engeller, diff'teki API anahtarlarında onay ister",
   "author": {
     "name": "HakanKorkz"
