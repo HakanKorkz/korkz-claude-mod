@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Erisim, Limit, Plugins, Tools, Usage } from '../types'
+import type { Erisim, Git, Limit, Plugins, Tools, Usage } from '../types'
 
 // Eski sürümün açtığı yan panel; açık kaldıysa kapatılır.
 const ESKI_PANEL = 'oturum-maliyeti'
@@ -36,6 +36,7 @@ const model = atom({ plugin: 'oturum-maliyeti', key: 'model' } as const, null as
 const modelOptions = atom({ plugin: 'oturum-maliyeti', key: 'modelOptions' } as const, [] as string[])
 const isModelMenuOpen = atom({ plugin: 'oturum-maliyeti', key: 'isModelMenuOpen' } as const, false)
 const projeModeli = atom({ plugin: 'oturum-maliyeti', key: 'projeModeli' } as const, null as string | null)
+const git = atom({ plugin: 'oturum-maliyeti', key: 'git' } as const, null as Git | null)
 const erisim = atom({ plugin: 'oturum-maliyeti', key: 'erisim' } as const, {} as Record<string, Erisim>)
 
 // `claude-opus-5-5[1m]` → `Opus 5.5 (1M)`; tarih ekleri (`-20251001`) atılır.
@@ -90,7 +91,7 @@ let projeKimligi: string | undefined
 let kok = ''
 
 async function ogrenilenler($: EngineInterface) {
-  return ((await $.store.get('modelKimlikleri')) ?? {}) as Record<string, string>
+  return ((await $.store.get('modelKimlikleri').catch(() => undefined)) ?? {}) as Record<string, string>
 }
 
 async function modelYenile($: EngineInterface) {
@@ -102,7 +103,7 @@ async function modelYenile($: EngineInterface) {
   if (id !== null && id.startsWith('claude-')) {
     const o = await ogrenilenler($)
     const temiz = id.replace(/\[1m\]$/i, '')
-    if (o[aileOf(id)] !== temiz) await $.store.set('modelKimlikleri', { ...o, [aileOf(id)]: temiz })
+    if (o[aileOf(id)] !== temiz) await $.store.set('modelKimlikleri', { ...o, [aileOf(id)]: temiz }).catch(() => undefined)
   }
   if (satir?.options !== undefined) {
     await update($, modelOptions, () => menuSecenekleri(satir.options ?? []))
@@ -160,6 +161,40 @@ async function erisimDenetle($: EngineInterface) {
   await update($, erisim, () =>
     Object.fromEntries(secenekler.flatMap(s => (yeni[s] !== undefined && simdi - (yeni[s]?.at ?? 0) < ERISIM_SURESI ? [[s, yeni[s]?.durum ?? 'var']] : []))),
   )
+}
+
+const klasorAdi = (yol: string) => yol.replace(/\/+$/, '').split('/').pop() ?? yol
+
+// `git rev-parse --abbrev-ref HEAD --show-toplevel --git-dir --git-common-dir` çıktısı.
+// Bağlı bir worktree'nin git-dir'i ana deponun `.git/worktrees/<ad>` klasörüdür.
+export const gitCoz = (cikti: string, kisaCommit: string | null = null): Git | null => {
+  const [dal, ust, gitDir, ortak] = cikti.split('\n').map(s => s.trim())
+  if (!dal || !ust || !gitDir || !ortak) return null
+  const anaKok = ortak.replace(/\/\.git\/?$/, '')
+
+  return {
+    branch: dal === 'HEAD' ? null : dal,
+    commit: dal === 'HEAD' ? kisaCommit : null,
+    tree: klasorAdi(ust),
+    isWorktree: gitDir !== ortak,
+    repo: klasorAdi(anaKok === ortak ? klasorAdi(ortak) : anaKok),
+  }
+}
+
+async function gitYenile($: EngineInterface) {
+  const r = await $.process
+    .run(['git', 'rev-parse', '--abbrev-ref', 'HEAD', '--path-format=absolute', '--show-toplevel', '--git-dir', '--git-common-dir'], { timeoutMs: 5_000 })
+    .catch(() => undefined)
+  let sonuc: Git | null = null
+  if (r?.exitCode === 0) {
+    const ayrik = r.stdout.startsWith('HEAD\n')
+    const kisa = ayrik
+      ? await $.process.run(['git', 'rev-parse', '--short', 'HEAD'], { timeoutMs: 5_000 }).then(x => x.stdout.trim() || null).catch(() => null)
+      : null
+    sonuc = gitCoz(r.stdout, kisa)
+  }
+  const eski = await read($, git)
+  if (JSON.stringify(eski) !== JSON.stringify(sonuc)) await update($, git, () => sonuc)
 }
 
 async function menuyuAc($: EngineInterface) {
@@ -281,6 +316,7 @@ export const register: Register = on => {
     await update($, isModelMenuOpen, () => false)
     await modelYenile($)
     await projeYukle($)
+    await gitYenile($)
     const now = await $.session.usage()
     const simdi = await $.clock.now()
     await update($, usage, u => ({
@@ -386,6 +422,8 @@ export const register: Register = on => {
         errors: t.errors + (hata ? 1 : 0),
       }))
       if (e.tool === 'Skill') skillAraci -= 1
+      // Dal ya da worktree değiştiren araçlardan sonra şerit hemen güncellensin.
+      if (e.tool === 'Bash' || e.tool === 'EnterWorktree' || e.tool === 'ExitWorktree') await gitYenile($)
       if (plugin !== undefined) {
         await update($, plugins, p => ({
           ...p,
@@ -400,6 +438,7 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       await pluginYenile($)
       await modelYenile($)
+      await gitYenile($)
     }
     const t = e.usage
     if (e.agentId === undefined && t !== undefined) {
@@ -433,6 +472,7 @@ export const register: Register = on => {
     const durumlar = await read($, erisim)
     const etkin = proje === null ? id : (kimlikCoz(proje) ?? proje)
     const projeAdi = kok.split('/').filter(Boolean).pop() ?? 'bu proje'
+    const g = await read($, git)
     const modelSatiri = (
       <Box key="model" flexDirection="row">
         <Text>🤖 </Text>
@@ -444,6 +484,20 @@ export const register: Register = on => {
           <Text dimColor>  seçim yalnızca {projeAdi} için geçerli · 🔒 planına dahil değil</Text>
         ) : proje === null ? null : (
           <Text dimColor>  {projeAdi} için seçildi</Text>
+        )}
+        {g === null || menuAcik ? null : (
+          <Text>
+            {'   '}
+            <Text color="magenta">⎇ {g.branch ?? `ayrık HEAD ${g.commit ?? ''}`.trim()}</Text>
+            {g.isWorktree ? (
+              <Text>
+                {'  '}<Text color="cyan">🌳 {g.tree}</Text>
+                <Text dimColor> (worktree · {g.repo})</Text>
+              </Text>
+            ) : (
+              <Text dimColor>  📁 {g.tree} (ana çalışma ağacı)</Text>
+            )}
+          </Text>
         )}
       </Box>
     )

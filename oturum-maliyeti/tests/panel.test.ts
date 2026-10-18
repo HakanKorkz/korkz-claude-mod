@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { kimlikCoz, menuSecenekleri, modelAdi, secenekAdi } from '../hooks/register'
+import { gitCoz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi } from '../hooks/register'
 
 test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
@@ -147,4 +147,36 @@ test('model adları ve kimlikleri', () => {
   expect(kimlikCoz('bilinmeyen')).toBeUndefined()
   expect(secenekAdi('opus[1m]')).toBe('Opus (1M)')
   expect(menuSecenekleri(['default', 'best', 'haiku', 'opusplan'])).toEqual(['default', 'haiku'])
+})
+
+test('git çıktısından dal ve worktree', () => {
+  expect(gitCoz('main\n/p/claude-mods\n/p/claude-mods/.git\n/p/claude-mods/.git\n')).toEqual({
+    branch: 'main', commit: null, tree: 'claude-mods', isWorktree: false, repo: 'claude-mods',
+  })
+  expect(gitCoz('ozellik\n/w/ozellik-wt\n/p/claude-mods/.git/worktrees/ozellik-wt\n/p/claude-mods/.git\n')).toEqual({
+    branch: 'ozellik', commit: null, tree: 'ozellik-wt', isWorktree: true, repo: 'claude-mods',
+  })
+  expect(gitCoz('HEAD\n/p/x\n/p/x/.git\n/p/x/.git\n', 'abc1234')?.commit).toBe('abc1234')
+  expect(gitCoz('')).toBeNull()
+})
+
+test('şerit dalı ve worktree\'yi gösterir, Bash sonrası yeniler', async ($, on) => {
+  let cikti = 'main\n/p/claude-mods\n/p/claude-mods/.git\n/p/claude-mods/.git\n'
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as never)
+  on('process.run', () => ({ value: { exitCode: 0, stdout: cikti, stderr: '' } }) as never)
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', () => ({ result: {}, text: 'ok' }) as never)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 140 } } as never)
+  expect(await ui.find({ type: 'Text', text: /⎇ main/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /📁 claude-mods \(ana çalışma ağacı\)/ })).toBeDefined()
+
+  cikti = 'ozellik\n/w/ozellik-wt\n/p/claude-mods/.git/worktrees/ozellik-wt\n/p/claude-mods/.git\n'
+  await $.tool.call({ tool: 'Bash', command: 'cd /w/ozellik-wt' })
+  expect(await ui.find({ type: 'Text', text: /⎇ ozellik/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /🌳 ozellik-wt/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /worktree · claude-mods/ })).toBeDefined()
+  await ui.unmount()
 })

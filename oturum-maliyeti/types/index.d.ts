@@ -9,6 +9,19 @@ export type Limit = {
 /** Bir modelin plandaki durumu: deneme isteği yanıt verdi, vermedi ya da sürüyor. */
 export type Erisim = 'var' | 'yok' | 'bakiliyor'
 
+export type Git = {
+  /** Dal adı; ayrık HEAD'de null. */
+  branch: string | null
+  /** Ayrık HEAD'de kısa commit. */
+  commit: string | null
+  /** Çalışma ağacının klasör adı. */
+  tree: string
+  /** Bağlı bir worktree mi (ana çalışma ağacı değil). */
+  isWorktree: boolean
+  /** Ana deponun klasör adı. */
+  repo: string
+}
+
 export type Usage = {
   usd: number | null
   contextTokens: number | null
@@ -58,6 +71,8 @@ declare module 'claude-code' {
       projeModeli: string | null
       /** Menüdeki modellerin plandaki durumu. */
       erisim: Record<string, Erisim>
+      /** Oturumun çalıştığı git dalı ve worktree; depo dışında null. */
+      git: Git | null
     }
   }
 }
