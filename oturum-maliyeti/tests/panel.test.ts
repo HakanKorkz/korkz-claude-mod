@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { gitCoz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi } from '../hooks/register'
+import { dallariCoz, gitCoz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi, worktreeleriCoz } from '../hooks/register'
 
 test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
@@ -171,12 +171,118 @@ test('şerit dalı ve worktree\'yi gösterir, Bash sonrası yeniler', async ($, 
 
   const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 140 } } as never)
   expect(await ui.find({ type: 'Text', text: /⎇ main/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /📁 claude-mods \(ana çalışma ağacı\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /📁 claude-mods/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /ana çalışma ağacı/ })).toBeDefined()
 
   cikti = 'ozellik\n/w/ozellik-wt\n/p/claude-mods/.git/worktrees/ozellik-wt\n/p/claude-mods/.git\n'
   await $.tool.call({ tool: 'Bash', command: 'cd /w/ozellik-wt' })
   expect(await ui.find({ type: 'Text', text: /⎇ ozellik/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /🌳 ozellik-wt/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /worktree · claude-mods/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const WT_LISTE = 'worktree /p/claude-mods\nHEAD aaa\nbranch refs/heads/main\n\nworktree /w/ozellik-wt\nHEAD bbb\nbranch refs/heads/ozellik\n\nworktree /w/ayrik\nHEAD ccc\ndetached\n'
+
+test('dal ve worktree listeleri', () => {
+  expect(dallariCoz('main\t/p/claude-mods\nozellik\t/w/ozellik-wt\ndiger\t\n', '/p/claude-mods')).toEqual([
+    { ad: 'main', worktree: null },
+    { ad: 'ozellik', worktree: '/w/ozellik-wt' },
+    { ad: 'diger', worktree: null },
+  ])
+  expect(worktreeleriCoz(WT_LISTE)).toEqual([
+    { yol: '/p/claude-mods', ad: 'claude-mods', dal: 'main', ana: true },
+    { yol: '/w/ozellik-wt', ad: 'ozellik-wt', dal: 'ozellik', ana: false },
+    { yol: '/w/ayrik', ad: 'ayrik', dal: null, ana: false },
+  ])
+})
+
+test('şeritten dala ve worktree\'ye geçilir, Claude\'a not düşülür', async ($, on) => {
+  let dal = 'main'
+  let agac = '/p/claude-mods'
+  const komutlar: string[][] = []
+  const toasts: string[] = []
+  const araclar: unknown[] = []
+  let gelenBaglam: readonly string[] = []
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } as never })
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as never)
+  on('process.run', ($, e) => {
+    const argv = [...(e as unknown as { argv: string[] }).argv]
+    komutlar.push(argv)
+    const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } }) as never
+    if (argv.includes('--git-common-dir')) {
+      const gd = agac === '/p/claude-mods' ? '/p/claude-mods/.git' : `/p/claude-mods/.git/worktrees/${agac.split('/').pop()}`
+      return ok(`${dal}\n${agac}\n${gd}\n/p/claude-mods/.git\n`)
+    }
+    if (argv[1] === 'rev-parse') return ok(`${agac}\n`)
+    if (argv[1] === 'for-each-ref') return ok('main\t/p/claude-mods\ndiger\t\nozellik\t/w/ozellik-wt\n')
+    if (argv[1] === 'worktree') return ok(WT_LISTE)
+    if (argv[1] === 'switch') {
+      if (argv[2] === 'bozuk') return { value: { exitCode: 128, stdout: '', stderr: 'fatal: invalid reference: bozuk\n' } } as never
+      dal = argv[2] ?? dal
+      return ok('')
+    }
+    return ok('')
+  })
+  on('tool.call', ($, e) => {
+    araclar.push(e)
+    if (e.tool === 'EnterWorktree') agac = (e as unknown as { path: string }).path
+    if (e.tool === 'EnterWorktree') dal = 'ozellik'
+    return { result: {}, text: 'ok' } as never
+  })
+  on('prompt.submit', ($, e) => { gelenBaglam = e.context ?? []; return { text: e.text } })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 160 } } as never)
+
+  await ui.press({ key: 'git-dal' })
+  expect(await ui.find({ type: 'Text', text: /● main/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /○ diger/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /🌳 ozellik/ })).toBeDefined()
+
+  await ui.press({ key: 'dal:diger' })
+  expect(komutlar.some(a => a.join(' ') === 'git switch diger')).toBe(true)
+  expect(toasts.at(-1)).toBe('⎇ diger dalına geçildi')
+  expect(await ui.find({ type: 'Text', text: /⎇ diger/ })).toBeDefined()
+
+  await $.prompt.submit({ text: 'devam' } as never)
+  expect(gelenBaglam.join(' ')).toContain('"diger" dalına geçti')
+  await $.prompt.submit({ text: 'sonraki' } as never)
+  expect(gelenBaglam.length).toBe(0)
+
+  // Başka worktree'de açık dala tıklamak o worktree'ye geçirir.
+  await ui.press({ key: 'git-dal' })
+  await ui.press({ key: 'dal:ozellik' })
+  expect(araclar.at(-1)).toMatchObject({ tool: 'EnterWorktree', path: '/w/ozellik-wt' })
+  expect(toasts.at(-1)).toBe("🌳 ozellik-wt worktree'sine geçildi")
+  expect(await ui.find({ type: 'Text', text: /🌳 ozellik-wt/ })).toBeDefined()
+
+  // Ana çalışma ağacına dönüş ExitWorktree ile.
+  await ui.press({ key: 'git-worktree' })
+  expect(await ui.find({ type: 'Text', text: /● 🌳 ozellik-wt/ })).toBeDefined()
+  await ui.press({ key: 'worktree:/p/claude-mods' })
+  expect(araclar.at(-1)).toMatchObject({ tool: 'ExitWorktree', action: 'keep' })
+  await ui.unmount()
+})
+
+test('dal değişmezse git hatası gösterilir', async ($, on) => {
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } as never })
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('process.run', ($, e) => {
+    const argv = (e as unknown as { argv: string[] }).argv
+    if (argv[1] === 'switch') return { value: { exitCode: 1, stdout: '', stderr: 'error: Your local changes would be overwritten by checkout\n' } } as never
+    if (argv.includes('--git-common-dir')) return { value: { exitCode: 0, stdout: 'main\n/p/x\n/p/x/.git\n/p/x/.git\n', stderr: '' } } as never
+    return { value: { exitCode: 0, stdout: argv[1] === 'for-each-ref' ? 'main\t/p/x\nbaska\t\n' : '', stderr: '' } } as never
+  })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 160 } } as never)
+  await ui.press({ key: 'git-dal' })
+  await ui.press({ key: 'dal:baska' })
+  expect(toasts.at(-1)).toBe('⎇ baska dalına geçilemedi: Your local changes would be overwritten by checkout')
+  expect(await ui.find({ type: 'Text', text: /⎇ main/ })).toBeDefined()
   await ui.unmount()
 })

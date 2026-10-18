@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Erisim, Git, Limit, Plugins, Tools, Usage } from '../types'
+import type { Dal, Erisim, Git, Limit, Plugins, Tools, Usage, Worktree } from '../types'
 
 // Eski sürümün açtığı yan panel; açık kaldıysa kapatılır.
 const ESKI_PANEL = 'oturum-maliyeti'
@@ -37,6 +37,9 @@ const modelOptions = atom({ plugin: 'oturum-maliyeti', key: 'modelOptions' } as 
 const isModelMenuOpen = atom({ plugin: 'oturum-maliyeti', key: 'isModelMenuOpen' } as const, false)
 const projeModeli = atom({ plugin: 'oturum-maliyeti', key: 'projeModeli' } as const, null as string | null)
 const git = atom({ plugin: 'oturum-maliyeti', key: 'git' } as const, null as Git | null)
+const gitMenu = atom({ plugin: 'oturum-maliyeti', key: 'gitMenu' } as const, null as 'dal' | 'worktree' | null)
+const dallar = atom({ plugin: 'oturum-maliyeti', key: 'dallar' } as const, [] as Dal[])
+const worktreeler = atom({ plugin: 'oturum-maliyeti', key: 'worktreeler' } as const, [] as Worktree[])
 const erisim = atom({ plugin: 'oturum-maliyeti', key: 'erisim' } as const, {} as Record<string, Erisim>)
 
 // `claude-opus-5-5[1m]` → `Opus 5.5 (1M)`; tarih ekleri (`-20251001`) atılır.
@@ -112,16 +115,16 @@ async function modelYenile($: EngineInterface) {
 
 async function projeYukle($: EngineInterface) {
   kok = await $.session.root().catch(() => '')
-  const harita = ((await $.store.get('projeModelleri')) ?? {}) as Record<string, string>
+  const harita = ((await $.store.get('projeModelleri').catch(() => undefined)) ?? {}) as Record<string, string>
   const secim = harita[kok] ?? null
   await update($, projeModeli, () => secim)
   projeKimligi = secim === null ? undefined : kimlikCoz(secim, await ogrenilenler($))
 }
 
 async function projeModeliYaz($: EngineInterface, secim: string | null) {
-  const harita = ((await $.store.get('projeModelleri')) ?? {}) as Record<string, string>
+  const harita = ((await $.store.get('projeModelleri').catch(() => undefined)) ?? {}) as Record<string, string>
   const { [kok]: _, ...diger } = harita
-  await $.store.set('projeModelleri', secim === null ? diger : { ...diger, [kok]: secim })
+  await $.store.set('projeModelleri', secim === null ? diger : { ...diger, [kok]: secim }).catch(() => undefined)
   await update($, projeModeli, () => secim)
   projeKimligi = secim === null ? undefined : kimlikCoz(secim, await ogrenilenler($))
 }
@@ -197,7 +200,85 @@ async function gitYenile($: EngineInterface) {
   if (JSON.stringify(eski) !== JSON.stringify(sonuc)) await update($, git, () => sonuc)
 }
 
+// `git for-each-ref --format=%(refname:short)%09%(worktreepath)` çıktısı; bu
+// çalışma ağacında açık dalın worktree'si sayılmaz.
+export const dallariCoz = (cikti: string, buAgac: string): Dal[] =>
+  cikti
+    .split('\n')
+    .map(s => s.split('\t'))
+    .filter(([ad]) => ad !== undefined && ad.trim() !== '')
+    .map(([ad = '', yol = '']) => ({ ad: ad.trim(), worktree: yol.trim() !== '' && yol.trim() !== buAgac ? yol.trim() : null }))
+
+// `git worktree list --porcelain` çıktısı; ilk kayıt ana çalışma ağacıdır.
+export const worktreeleriCoz = (cikti: string): Worktree[] =>
+  cikti
+    .split(/\n\s*\n/)
+    .map(blok => blok.split('\n'))
+    .flatMap((satirlar, i) => {
+      const yol = satirlar.find(s => s.startsWith('worktree '))?.slice('worktree '.length).trim()
+      if (yol === undefined || satirlar.some(s => s === 'bare')) return []
+      const dal = satirlar.find(s => s.startsWith('branch '))?.slice('branch '.length).replace(/^refs\/heads\//, '').trim() ?? null
+      return [{ yol, ad: klasorAdi(yol), dal, ana: i === 0 }]
+    })
+
+// Şeritten yapılan geçiş Claude'a bir sonraki mesajda söylenir.
+let bekleyenNot: string | undefined
+// Bu oturumda EnterWorktree ile bir worktree'ye girildi mi; ana ağaca dönüş ExitWorktree ile.
+let worktreeyeGirildi = false
+
+async function git$($: EngineInterface, argv: string[]) {
+  return $.process.run(['git', ...argv], { timeoutMs: 15_000 }).catch(() => undefined)
+}
+
+async function gitListeleriYenile($: EngineInterface) {
+  const [ust, refs, wt] = await Promise.all([
+    git$($, ['rev-parse', '--show-toplevel']),
+    git$($, ['for-each-ref', '--sort=-committerdate', '--count=15', '--format=%(refname:short)%09%(worktreepath)', 'refs/heads']),
+    git$($, ['worktree', 'list', '--porcelain']),
+  ])
+  const buAgac = ust?.stdout.trim() ?? ''
+  await update($, dallar, () => (refs?.exitCode === 0 ? dallariCoz(refs.stdout, buAgac) : []))
+  await update($, worktreeler, () => (wt?.exitCode === 0 ? worktreeleriCoz(wt.stdout) : []))
+}
+
+async function gitMenuAc($: EngineInterface, tur: 'dal' | 'worktree') {
+  await update($, isModelMenuOpen, () => false)
+  const acik = await update($, gitMenu, m => (m === tur ? null : tur))
+  if (acik !== null) await gitListeleriYenile($)
+}
+
+async function dalaGec($: EngineInterface, ad: string) {
+  await update($, gitMenu, () => null)
+  const r = await git$($, ['switch', ad])
+  if (r === undefined || r.exitCode !== 0) {
+    const neden = (r?.stderr ?? '').split('\n').find(s => s.trim() !== '')?.replace(/^[^\s:]{1,15}: /, '') ?? 'git çalışmadı'
+    $.ui.toast(`⎇ ${ad} dalına geçilemedi: ${neden}`)
+    return
+  }
+  await gitYenile($)
+  bekleyenNot = `Kullanıcı şeritten "${ad}" dalına geçti (git switch). Dosyalar bu dala göre değişmiş olabilir.`
+  $.ui.toast(`⎇ ${ad} dalına geçildi`)
+}
+
+async function worktreeyeGec($: EngineInterface, w: Worktree) {
+  await update($, gitMenu, () => null)
+  const cikis = w.ana && worktreeyeGirildi
+  const r = cikis
+    ? await $.tool.call({ tool: 'ExitWorktree', action: 'keep' }).catch((h: unknown) => ({ deny: String(h) }))
+    : await $.tool.call({ tool: 'EnterWorktree', path: w.yol }).catch((h: unknown) => ({ deny: String(h) }))
+  if (r.deny !== undefined || r.isError === true) {
+    $.ui.toast(`🌳 ${w.ad} worktree'sine geçilmedi${r.deny !== undefined ? '' : `: ${(r.text ?? '').replace(/<\/?tool_use_error>/g, '').slice(0, 120)}`}`)
+    return
+  }
+  worktreeyeGirildi = !w.ana
+  await gitYenile($)
+  await projeYukle($)
+  bekleyenNot = `Kullanıcı şeritten ${w.ana ? 'ana çalışma ağacına' : `"${w.ad}" worktree'sine`} geçti (${w.yol}${w.dal === null ? '' : `, dal ${w.dal}`}). Oturumun çalışma klasörü artık orası.`
+  $.ui.toast(`${w.ana ? '📁' : '🌳'} ${w.ad} ${w.ana ? 'ana çalışma ağacına' : "worktree'sine"} geçildi`)
+}
+
 async function menuyuAc($: EngineInterface) {
+  await update($, gitMenu, () => null)
   const acik = await update($, isModelMenuOpen, a => !a)
   if (acik) await erisimDenetle($)
 }
@@ -314,6 +395,7 @@ export const register: Register = on => {
     await pluginYenile($)
     await update($, plugins, p => ({ ...p, running: {}, thisTurn: [] }))
     await update($, isModelMenuOpen, () => false)
+    await update($, gitMenu, () => null)
     await modelYenile($)
     await projeYukle($)
     await gitYenile($)
@@ -382,6 +464,11 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     if (e.command === undefined) {
       await update($, plugins, p => ({ ...p, thisTurn: [] }))
+    }
+    if (e.command === undefined && bekleyenNot !== undefined) {
+      const not = bekleyenNot
+      bekleyenNot = undefined
+      return next({ ...e, context: [...(e.context ?? []), not] })
     }
 
     return next(e)
@@ -473,6 +560,7 @@ export const register: Register = on => {
     const etkin = proje === null ? id : (kimlikCoz(proje) ?? proje)
     const projeAdi = kok.split('/').filter(Boolean).pop() ?? 'bu proje'
     const g = await read($, git)
+    const acikGit = await read($, gitMenu)
     const modelSatiri = (
       <Box key="model" flexDirection="row">
         <Text>🤖 </Text>
@@ -486,18 +574,18 @@ export const register: Register = on => {
           <Text dimColor>  {projeAdi} için seçildi</Text>
         )}
         {g === null || menuAcik ? null : (
-          <Text>
-            {'   '}
-            <Text color="magenta">⎇ {g.branch ?? `ayrık HEAD ${g.commit ?? ''}`.trim()}</Text>
-            {g.isWorktree ? (
-              <Text>
-                {'  '}<Text color="cyan">🌳 {g.tree}</Text>
-                <Text dimColor> (worktree · {g.repo})</Text>
-              </Text>
-            ) : (
-              <Text dimColor>  📁 {g.tree} (ana çalışma ağacı)</Text>
-            )}
-          </Text>
+          <Box key="git" flexDirection="row">
+            <Text>   </Text>
+            <Button key="git-dal" onPress={() => gitMenuAc($, 'dal')}>
+              <Text color="magenta">⎇ {g.branch ?? `ayrık HEAD ${g.commit ?? ''}`.trim()}</Text> {acikGit === 'dal' ? '▴' : '▾'}
+            </Button>
+            <Text>  </Text>
+            <Button key="git-worktree" onPress={() => gitMenuAc($, 'worktree')}>
+              {g.isWorktree ? <Text color="cyan">🌳 {g.tree}</Text> : <Text>📁 {g.tree}</Text>}{' '}
+              {acikGit === 'worktree' ? '▴' : '▾'}
+            </Button>
+            <Text dimColor>  {g.isWorktree ? `worktree · ${g.repo}` : 'ana çalışma ağacı'}</Text>
+          </Box>
         )}
       </Box>
     )
@@ -527,9 +615,65 @@ export const register: Register = on => {
       </Box>
     ) : null
 
+    const dalListesi = await read($, dallar)
+    const agaclar = await read($, worktreeler)
+    const gitMenusu = g === null || acikGit === null ? null : acikGit === 'dal' ? (
+      <Box key="git-menu" flexDirection="row" flexWrap="wrap" paddingLeft={3}>
+        {dalListesi.length === 0 ? <Text dimColor>dal bulunamadı</Text> : null}
+        {dalListesi.map(d => {
+          const secili = d.ad === g.branch
+          const agac = d.worktree === null ? undefined : agaclar.find(w => w.yol === d.worktree)
+          return (
+            <Box key={d.ad} marginRight={2}>
+              <Button
+                key={`dal:${d.ad}`}
+                plain
+                onPress={() =>
+                  secili
+                    ? update($, gitMenu, () => null)
+                    : agac !== undefined
+                      ? worktreeyeGec($, agac)
+                      : dalaGec($, d.ad)
+                }
+              >
+                {d.worktree !== null ? (
+                  <Text dimColor>🌳 {d.ad}</Text>
+                ) : (
+                  <Text color={secili ? 'green' : undefined} bold={secili}>
+                    {secili ? '● ' : '○ '}
+                    {d.ad}
+                  </Text>
+                )}
+              </Button>
+            </Box>
+          )
+        })}
+        <Text dimColor>🌳 başka bir worktree'de açık: tıklayınca oraya geçilir</Text>
+      </Box>
+    ) : (
+      <Box key="git-menu" flexDirection="row" flexWrap="wrap" paddingLeft={3}>
+        {agaclar.map(w => {
+          const secili = w.ad === g.tree
+          return (
+            <Box key={w.yol} marginRight={2}>
+              <Button key={`worktree:${w.yol}`} plain onPress={() => (secili ? update($, gitMenu, () => null) : worktreeyeGec($, w))}>
+                <Text color={secili ? 'green' : undefined} bold={secili}>
+                  {secili ? '● ' : '○ '}
+                  {w.ana ? '📁' : '🌳'} {w.ad}
+                </Text>
+                <Text dimColor> {w.dal ?? 'ayrık'}</Text>
+              </Button>
+            </Box>
+          )
+        })}
+        {agaclar.length <= 1 ? <Text dimColor>başka worktree yok (git worktree add ile oluşturulur)</Text> : null}
+      </Box>
+    )
+
     const satirlar = [
       modelSatiri,
       ...(modelMenusu === null ? [] : [modelMenusu]),
+      ...(gitMenusu === null ? [] : [gitMenusu]),
       <Text key="ozet">
         <Text bold>💰 {u.usd === null ? '—' : `$${u.usd.toFixed(4)}`}</Text>
         {'   '}Bağlam {cubuk(u.contextPercent ?? 0, barGenislik)}{' '}

@@ -4,7 +4,7 @@
 
 | Mod | Ne yapar |
 |---|---|
-| **oturum-maliyeti** | Prompt'un üstünde bir şerit: kullanılan model (tıklayınca planınızdaki modeller listelenir, birine tıklayınca yalnızca o proje için o modele geçilir), çalışılan git dalı ve worktree, oturum maliyeti, bağlam doluluğu, token sayıları, araç kullanımı, bağlı MCP sunucuları, 5 saatlik ve haftalık limitler. `/maliyet` ile gizlenir/gösterilir. |
+| **oturum-maliyeti** | Prompt'un üstünde bir şerit: kullanılan model (tıklayınca planınızdaki modeller listelenir, birine tıklayınca yalnızca o proje için o modele geçilir), çalışılan git dalı ve worktree (tıklayınca dallar ya da worktree'ler listelenir, birine tıklayınca oraya geçilir), oturum maliyeti, bağlam doluluğu, token sayıları, araç kullanımı, bağlı MCP sunucuları, 5 saatlik ve haftalık limitler. `/maliyet` ile gizlenir/gösterilir. |
 | **tehlike-kalkani** | `rm -rf /`, `mkfs`, `curl … \| bash`, `DROP DATABASE`, `shutdown` gibi yıkıcı Bash komutlarını çalışmadan engeller. `git push --force`, `git reset --hard`, `artisan migrate:fresh`/`db:wipe`, `chmod -R 777`, `docker system prune`, `DROP TABLE`, `TRUNCATE` gibi riskli olanlarda, izin kuralları izin verse bile onay ister. |
 | **turkce-cevap** | System prompt'a "her zaman Türkçe yanıt ver" talimatı ekler. |
 | **is-bitti** | Uzun süren bir iş bitince (süre prompt'u gönderdiğiniz andan ölçülür) ses çalar, masaüstü bildirimi ve toast gösterir; bildirimde proje adı ve Claude'un cevabının ilk satırı yer alır. Claude izin isterken ya da soru sorarken ayrı bir sesle "onay bekliyor" der. `/is-bitti` ile ayarlanır. |
@@ -48,6 +48,7 @@ claude plugin install oturum-maliyeti --marketplace HakanKorkz/korkz-claude-mod
 ## Notlar
 
 - Şeritten seçilen model yalnızca o projenin kök klasörü için geçerlidir ve hiçbir ayar dosyasına yazılmaz; diğer projeler genel modelle (`/model`, `/config`) devam eder. Seçim ana döngünün her model isteğine uygulanır; alt ajanlar kendi modellerinde kalır. `/model` ile model seçerseniz projenin seçimi kalkar.
+- Şeritten dal değiştirmek `git switch <dal>` çalıştırır; kaydedilmemiş değişiklikler çakışırsa git'in hatası gösterilir ve dal değişmez. Başka bir worktree'de açık dallar 🌳 ile işaretlidir, tıklayınca o worktree'ye geçilir. Worktree geçişi Claude Code'un `EnterWorktree` aracıyla yapılır ve her seferinde onay ister. Geçişten sonraki ilk mesajınıza Claude için bir not eklenir.
 - Model menüsü açılınca her modele 1 token'lık bir deneme isteği gider; planınıza dahil olmayanlar 🔒 ile gösterilir ve seçilemez. Sonuç 12 saat saklanır.
 - `turkce-cevap`, Claude Code'u kurum olarak yöneten organizasyonlarda yalnızca yönetilen ayarlarda listelenirse çalışır.
 - `tehlike-kalkani` ve `gizli-koruma`nın "onay ister" kuralları auto modda kullanıcıya değil auto mod sınıflandırıcısına sorulur.

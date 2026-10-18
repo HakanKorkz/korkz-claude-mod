@@ -22,6 +22,21 @@ export type Git = {
   repo: string
 }
 
+export type Dal = {
+  ad: string
+  /** Dal başka bir worktree'de açıksa onun yolu. */
+  worktree: string | null
+}
+
+export type Worktree = {
+  yol: string
+  ad: string
+  /** Açık dal; ayrık HEAD'de null. */
+  dal: string | null
+  /** Ana çalışma ağacı mı. */
+  ana: boolean
+}
+
 export type Usage = {
   usd: number | null
   contextTokens: number | null
@@ -73,6 +88,10 @@ declare module 'claude-code' {
       erisim: Record<string, Erisim>
       /** Oturumun çalıştığı git dalı ve worktree; depo dışında null. */
       git: Git | null
+      /** Açık git menüsü. */
+      gitMenu: 'dal' | 'worktree' | null
+      dallar: Dal[]
+      worktreeler: Worktree[]
     }
   }
 }
