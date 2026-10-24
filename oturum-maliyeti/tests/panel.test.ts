@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { dallariCoz, gitCoz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi, sifirlanmaCoz, usageCoz, worktreeleriCoz } from '../hooks/register'
+import { dallariCoz, gitCoz, goreliTarih, kalanYaz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi, sifirlanmaCoz, usageCoz, worktreeleriCoz } from '../hooks/register'
 
 test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
@@ -27,7 +27,7 @@ test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: /%25/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Tur 1 ·/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5 saatlik .*%23\.5 ↻17:30/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Haftalık .*%92 ↻Pzt 09:00 · tahmini bitiş Per 15:15/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Haftalık .*%92 ↻Pzt 09:00 · tahmini bitiş bugün 15:15 \(6 sa 15 dk sonra\)/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /🔧 Bash 2 · MCP 1 .*toplam 3/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /🔌 MCP ● context7 1$/ })).toBeDefined()
     await ui.unmount()
@@ -435,4 +435,14 @@ test('limitler 5 dakikadan eskiyse kendiliğinden yenilenir, boştaki oturum yen
   await $.prompt.submit({ text: 'devam' } as never)
   await saat.advance(30_000)
   expect(usageCagri).toBe(bosta + 1)
+})
+
+test('göreli tarih ve kalan süre', () => {
+  const simdi = new Date(2026, 9, 24, 15, 32).getTime()
+  expect(goreliTarih(new Date(2026, 9, 24, 19, 59).getTime(), simdi)).toBe('bugün 19:59')
+  expect(goreliTarih(new Date(2026, 9, 25, 14, 54).getTime(), simdi)).toBe('yarın 14:54')
+  expect(goreliTarih(new Date(2026, 9, 27, 9, 0).getTime(), simdi)).toBe('Sal 09:00')
+  expect(kalanYaz(23 * 3_600_000 + 22 * 60_000)).toBe('23 sa 22 dk sonra')
+  expect(kalanYaz(40 * 60_000)).toBe('40 dk sonra')
+  expect(kalanYaz(27 * 3_600_000)).toBe('1 gün 3 sa sonra')
 })

@@ -352,14 +352,34 @@ const LIMIT_ADI: Record<string, string> = {
   seven_day: 'Haftalık',
   spend_limit: 'Harcama',
 }
-const sifirlanma = (iso: string | undefined, kind: string) => {
+const saatYaz = (d: Date) => d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+
+// `bugün 19:59`, `yarın 14:54`, daha ilerisi için `Sal 09:00`; takvim gününe göre.
+export const goreliTarih = (ms: number, now: number) => {
+  const d = new Date(ms)
+  const gun = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const fark = Math.round((gun(d) - gun(new Date(now))) / 86_400_000)
+  const on = fark === 0 ? 'bugün' : fark === 1 ? 'yarın' : d.toLocaleDateString('tr-TR', { weekday: 'short' })
+  return `${on} ${saatYaz(d)}`
+}
+
+// `6 sa 15 dk sonra`, `1 gün 3 sa sonra`
+export const kalanYaz = (ms: number) => {
+  const dk = Math.max(0, Math.floor(ms / 60_000))
+  if (dk < 60) return `${dk} dk sonra`
+  const sa = Math.floor(dk / 60)
+  if (sa < 24) return `${sa} sa${dk % 60 > 0 ? ` ${dk % 60} dk` : ''} sonra`
+  return `${Math.floor(sa / 24)} gün${sa % 24 > 0 ? ` ${sa % 24} sa` : ''} sonra`
+}
+
+const sifirlanma = (iso: string | undefined, kind: string, now: number) => {
   if (iso === undefined) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  const saat = d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-  return kind === 'five_hour'
-    ? ` ↻${saat}`
-    : ` ↻${d.toLocaleDateString('tr-TR', { weekday: 'short' })} ${saat}`
+  // 5 saatlik pencere hep bugüne yakındır: yalnızca saat; diğerleri göreli tarih.
+  return kind === 'five_hour' && goreliTarih(d.getTime(), now).startsWith('bugün')
+    ? ` ↻${saatYaz(d)}`
+    : ` ↻${goreliTarih(d.getTime(), now)}`
 }
 // `mcp__context7__query-docs` → `context7`; MCP olmayan araçta undefined.
 const sunucu = (tool: string) => (tool.startsWith('mcp__') ? tool.split('__')[1] : undefined)
@@ -382,10 +402,6 @@ const bitisTahmini = (l: Limit, now: number): number | undefined => {
   if (l.percentUsed >= 100) return now
 
   return Math.round(now + ((100 - l.percentUsed) / l.percentUsed) * gecen)
-}
-const tarih = (ms: number) => {
-  const d = new Date(ms)
-  return `${d.toLocaleDateString('tr-TR', { weekday: 'short' })} ${d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`
 }
 // Ayarlardaki açık plugin'ler: `{ "design@marketplace": true }` → `design`.
 async function pluginYenile($: EngineInterface) {
@@ -1042,13 +1058,13 @@ export const register: Register = on => {
                 <Text color={l.percentUsed >= 90 ? 'red' : l.percentUsed >= 70 ? 'yellow' : 'green'}>
                   {cubuk(l.percentUsed, limitBar)} %{l.percentUsed}
                 </Text>
-                <Text dimColor>{sifirlanma(l.resetsAt, l.kind)}</Text>
+                <Text dimColor>{sifirlanma(l.resetsAt, l.kind, limitSimdi)}</Text>
                 {l.bitis === undefined ? (
                   ''
                 ) : l.resetsAt !== undefined && l.bitis >= new Date(l.resetsAt).getTime() ? (
                   <Text color="green"> · bu hızla yetişir</Text>
                 ) : (
-                  <Text color={l.percentUsed >= 70 ? 'red' : 'yellow'}> · tahmini bitiş {tarih(l.bitis)}</Text>
+                  <Text color={l.percentUsed >= 70 ? 'red' : 'yellow'}> · tahmini bitiş {goreliTarih(l.bitis, limitSimdi)} ({kalanYaz(l.bitis - limitSimdi)})</Text>
                 )}
               </Text>
             ))}
