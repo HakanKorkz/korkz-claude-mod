@@ -485,21 +485,41 @@ async function paylasimOku($: EngineInterface) {
   }
 }
 
+// `/usage` sizin oturumunuzda bir ayarlar ekranı açar; bu yüzden ayrı, görünmez bir
+// `claude -p` sürecinde çalıştırılır: model isteği yok, sohbete satır düşmez.
+const USAGE_ARGV = ['claude', '-p', '/usage', '--strict-mcp-config', '--no-session-persistence']
+const OTOMATIK_ARALIK = 5 * 60_000
+const ETKIN_SURE = 30 * 60_000
+
+// Son kullanıcı etkinliği; boşta bekleyen oturum otomatik yenileme yapmaz.
+let sonEtkinlik = 0
+
+async function usageCek($: EngineInterface) {
+  const simdi = await $.clock.now()
+  // Aynı anda tek oturum: kilit bir dakika geçerli.
+  await $.store.set('usageKilit', simdi).catch(() => undefined)
+  const r = await $.process.run(USAGE_ARGV, { timeoutMs: 60_000, stdin: '' }).catch(() => undefined)
+  const liste = r?.exitCode === 0 ? usageCoz(r.stdout, await $.clock.now()) : []
+  if (liste.length > 0) await limitYaz($, liste, await $.clock.now(), 'usage')
+  return liste.length > 0
+}
+
 async function usageYenile($: EngineInterface) {
   if ((await read($, limitDurumu)).yenileniyor) return
   await update($, limitDurumu, d => ({ ...d, yenileniyor: true }))
   try {
-    const r = await $.command.run({ command: 'usage', args: '' } as never).catch(() => undefined) as { text?: string } | undefined
-    const simdi = await $.clock.now()
-    const liste = usageCoz(r?.text ?? '', simdi)
-    if (liste.length === 0) {
-      $.ui.toast('Limitler okunamadı (/usage yanıt vermedi)')
-      return
-    }
-    await limitYaz($, liste, simdi, 'usage')
+    if (!(await usageCek($))) $.ui.toast('Limitler okunamadı (claude -p /usage çalışmadı)')
   } finally {
     await update($, limitDurumu, d => ({ ...d, yenileniyor: false }))
   }
+}
+
+async function otomatikYenile($: EngineInterface) {
+  const simdi = await $.clock.now()
+  if (simdi - sonEtkinlik > ETKIN_SURE || (await read($, limitDurumu)).yenileniyor) return
+  const kilit = (await $.store.get('usageKilit').catch(() => undefined)) as number | undefined
+  if (simdi - limitZamani < OTOMATIK_ARALIK || (kilit !== undefined && simdi - kilit < 60_000)) return
+  await usageYenile($)
 }
 
 const once = (ms: number) =>
@@ -537,10 +557,12 @@ export const register: Register = on => {
       contextPercent: now.context.percent ?? u.contextPercent,
     }))
     if (now.rateLimits.length > 0) await limitYaz($, now.rateLimits, simdi, 'oturum')
+    sonEtkinlik = simdi
     await paylasimOku($)
     // Başka bir oturumun ölçtüğü daha taze limitler 30 saniyede bir alınır.
     $.clock.every(30_000, () => {
       void paylasimOku($)
+        .then(() => otomatikYenile($))
         .then(() => $.clock.now())
         .then(n => update($, saat, () => n))
         .catch(() => undefined)
@@ -629,6 +651,7 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    sonEtkinlik = await $.clock.now().catch(() => sonEtkinlik)
     if (e.command === undefined) {
       await update($, plugins, p => ({ ...p, thisTurn: [] }))
       // Yeni bir istekte biten ajanlar listeden çıkar; çalışanlar kalır.

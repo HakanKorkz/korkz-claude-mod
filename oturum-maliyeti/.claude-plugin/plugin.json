@@ -1,6 +1,6 @@
 {
   "name": "oturum-maliyeti",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Oturumun token kullanımını ve maliyetini prompt üstündeki bir şeritte gösterir",
   "types": "./types/index.d.ts",
   "author": {

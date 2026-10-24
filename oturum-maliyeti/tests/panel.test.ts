@@ -365,9 +365,10 @@ test('başka oturumun limitleri paylaşılır, ↻ ile /usage çekilir', async (
     store.set(key, value)
     return { value: undefined } as never
   })
-  on('command.run', ($, e) => {
-    if (e.command === 'usage') usageCagri += 1
-    return { text: e.command === 'usage' ? USAGE_METNI : '' }
+  on('process.run', ($, e) => {
+    const argv = (e as unknown as { argv: string[] }).argv
+    if (argv.includes('/usage')) usageCagri += 1
+    return { value: { exitCode: 0, stdout: argv.includes('/usage') ? USAGE_METNI : '', stderr: '' } } as never
   })
   on('session.measure', ($, e) => ({ changed: e.changed }))
   await $.session.start({ source: 'startup', cwd: '/p' } as never)
@@ -386,11 +387,52 @@ test('başka oturumun limitleri paylaşılır, ↻ ile /usage çekilir', async (
   await saat.advance(30_000)
   expect(await ui.find({ type: 'Text', text: /5 saatlik .*%35/ })).toBeDefined()
 
-  // ↻ /usage'ı çalıştırır, haftalık da gelir.
+  // ↻ /usage'ı ayrı bir claude -p sürecinde çalıştırır, haftalık da gelir.
   await ui.press({ key: 'limit-yenile' })
   expect(usageCagri).toBe(1)
   expect(await ui.find({ type: 'Text', text: /5 saatlik .*%37/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Haftalık .*%84/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /şimdi/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('limitler 5 dakikadan eskiyse kendiliğinden yenilenir, boştaki oturum yenilemez', async ($, on) => {
+  const saat = mock.clock(on, { now: new Date(2026, 9, 24, 15, 0).getTime() })
+  const store = new Map<string, unknown>()
+  let usageCagri = 0
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.usage', () => ({ value: { context: { window: 200_000 }, rateLimits: [] } }) as never)
+  on('session.start', () => ({ cwd: '/p' }) as never)
+  on('store.get', ($, e) => ({ value: store.get((e as unknown as { key: string }).key) }) as never)
+  on('store.set', ($, e) => {
+    const { key, value } = e as unknown as { key: string; value: unknown }
+    store.set(key, value)
+    return { value: undefined } as never
+  })
+  on('process.run', ($, e) => {
+    const argv = (e as unknown as { argv: string[] }).argv
+    if (argv.includes('/usage')) usageCagri += 1
+    return { value: { exitCode: 0, stdout: argv.includes('/usage') ? USAGE_METNI : '', stderr: '' } } as never
+  })
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  await $.session.start({ source: 'startup', cwd: '/p' } as never)
+
+  // Limit hiç bilinmiyor: ilk 30 saniyelik turda çekilir.
+  await saat.advance(30_000)
+  expect(usageCagri).toBe(1)
+  // 5 dakika dolmadan tekrar çekilmez.
+  await saat.advance(4 * 60_000)
+  expect(usageCagri).toBe(1)
+  await saat.advance(90_000)
+  expect(usageCagri).toBe(2)
+
+  // 30 dakika etkinlik yoksa durur; yeni mesajla yeniden başlar.
+  await saat.advance(35 * 60_000)
+  const bosta = usageCagri
+  await saat.advance(10 * 60_000)
+  expect(usageCagri).toBe(bosta)
+  await $.prompt.submit({ text: 'devam' } as never)
+  await saat.advance(30_000)
+  expect(usageCagri).toBe(bosta + 1)
 })
