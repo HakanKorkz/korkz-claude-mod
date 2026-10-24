@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { dallariCoz, gitCoz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi, worktreeleriCoz } from '../hooks/register'
+import { dallariCoz, gitCoz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi, sifirlanmaCoz, usageCoz, worktreeleriCoz } from '../hooks/register'
 
 test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
@@ -327,5 +327,70 @@ test('alt ajanlar: tür, model, görev, süre, araç ve durum', async ($, on) =>
   // Kullanıcının yeni mesajında biten ajanlar listeden kalkar.
   await $.prompt.submit({ text: 'devam' } as never)
   expect(await ui.find({ type: 'Text', text: /Alt ajanlar/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+const USAGE_METNI = `You are currently using your subscription to power your Claude Code usage
+
+Current session: 37% used · resets Oct 24, 7:59pm (Europe/Istanbul)
+Current week (all models): 84% used · resets Oct 25, 3:59pm (Europe/Istanbul)
+
+What's contributing to your limits usage?`
+
+test('/usage metni okunur', () => {
+  const simdi = new Date(2026, 9, 24, 15, 0).getTime()
+  const l = usageCoz(USAGE_METNI, simdi)
+  expect(l.map(x => [x.kind, x.percentUsed])).toEqual([['five_hour', 37], ['seven_day', 84]])
+  expect(new Date(l[0]?.resetsAt ?? '').getHours()).toBe(19)
+  expect(new Date(l[1]?.resetsAt ?? '').getDate()).toBe(25)
+  // Tarihsiz saat geçmişte kalırsa ertesi gün.
+  expect(new Date(sifirlanmaCoz('2:00pm', simdi) ?? '').getDate()).toBe(25)
+  expect(sifirlanmaCoz('yarın', simdi)).toBeUndefined()
+  expect(usageCoz('başka bir metin', simdi)).toEqual([])
+})
+
+test('başka oturumun limitleri paylaşılır, ↻ ile /usage çekilir', async ($, on) => {
+  const saat = mock.clock(on, { now: new Date(2026, 9, 24, 15, 0).getTime() })
+  const store = new Map<string, unknown>()
+  let usageCagri = 0
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('ui.toast', () => ({ value: undefined }) as never)
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.usage', () => ({ value: { context: { window: 200_000 }, rateLimits: [] } }) as never)
+  on('session.start', () => ({ cwd: '/p' }) as never)
+  on('store.get', ($, e) => ({ value: store.get((e as unknown as { key: string }).key) }) as never)
+  on('store.set', ($, e) => {
+    const { key, value } = e as unknown as { key: string; value: unknown }
+    store.set(key, value)
+    return { value: undefined } as never
+  })
+  on('command.run', ($, e) => {
+    if (e.command === 'usage') usageCagri += 1
+    return { text: e.command === 'usage' ? USAGE_METNI : '' }
+  })
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  await $.session.start({ source: 'startup', cwd: '/p' } as never)
+
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 160 } } as never)
+  expect(await ui.find({ type: 'Text', text: /Limitler henüz bilinmiyor/ })).toBeDefined()
+
+  // Bu oturum ölçer: değer depoya yazılır.
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [{ kind: 'five_hour', percentUsed: 32, resetsAt: '2026-10-24T16:59:00Z' }], changed: ['rateLimits'] })
+  expect((store.get('sonLimitler') as { limits: { percentUsed: number }[] }).limits[0]?.percentUsed).toBe(32)
+  expect(await ui.find({ type: 'Text', text: /5 saatlik .*%32/ })).toBeDefined()
+
+  // Başka bir oturum daha taze bir değer yazar; 30 sn içinde buraya gelir.
+  await saat.advance(60_000)
+  store.set('sonLimitler', { at: new Date(2026, 9, 24, 15, 1).getTime(), limits: [{ kind: 'five_hour', percentUsed: 35, resetsAt: '2026-10-24T16:59:00Z' }] })
+  await saat.advance(30_000)
+  expect(await ui.find({ type: 'Text', text: /5 saatlik .*%35/ })).toBeDefined()
+
+  // ↻ /usage'ı çalıştırır, haftalık da gelir.
+  await ui.press({ key: 'limit-yenile' })
+  expect(usageCagri).toBe(1)
+  expect(await ui.find({ type: 'Text', text: /5 saatlik .*%37/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Haftalık .*%84/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /şimdi/ })).toBeDefined()
   await ui.unmount()
 })

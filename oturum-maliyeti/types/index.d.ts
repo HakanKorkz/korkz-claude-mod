@@ -57,6 +57,14 @@ export type AltAjan = {
   ustId: string | null
 }
 
+export type LimitDurumu = {
+  /** Limitlerin ölçüldüğü an (epoch ms); hiç ölçülmediyse 0. */
+  at: number
+  /** Nereden geldi: bu oturumun isteği, başka bir oturum, /usage. */
+  kaynak: 'oturum' | 'paylasim' | 'usage' | null
+  yenileniyor: boolean
+}
+
 export type Usage = {
   usd: number | null
   contextTokens: number | null
@@ -116,6 +124,7 @@ declare module 'claude-code' {
       ajanlar: AltAjan[]
       /** Çalışan ajanların süresini ilerletmek için son saat. */
       saat: number
+      limitDurumu: LimitDurumu
     }
   }
 }

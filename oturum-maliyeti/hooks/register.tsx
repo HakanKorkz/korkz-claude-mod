@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AltAjan, Dal, Erisim, Git, Limit, Plugins, Tools, Usage, Worktree } from '../types'
+import type { AltAjan, Dal, Erisim, Git, Limit, LimitDurumu, Plugins, Tools, Usage, Worktree } from '../types'
 
 // Eski sürümün açtığı yan panel; açık kaldıysa kapatılır.
 const ESKI_PANEL = 'oturum-maliyeti'
@@ -42,6 +42,7 @@ const dallar = atom({ plugin: 'oturum-maliyeti', key: 'dallar' } as const, [] as
 const worktreeler = atom({ plugin: 'oturum-maliyeti', key: 'worktreeler' } as const, [] as Worktree[])
 const ajanlar = atom({ plugin: 'oturum-maliyeti', key: 'ajanlar' } as const, [] as AltAjan[])
 const saat = atom({ plugin: 'oturum-maliyeti', key: 'saat' } as const, 0)
+const limitDurumu = atom({ plugin: 'oturum-maliyeti', key: 'limitDurumu' } as const, { at: 0, kaynak: null, yenileniyor: false } as LimitDurumu)
 const erisim = atom({ plugin: 'oturum-maliyeti', key: 'erisim' } as const, {} as Record<string, Erisim>)
 
 // `claude-opus-5-5[1m]` → `Opus 5.5 (1M)`; tarih ekleri (`-20251001`) atılır.
@@ -419,6 +420,91 @@ const limitler = (list: readonly Limit[], now: number): Limit[] =>
     bitis: bitisTahmini(l, now),
   }))
 
+
+const AYLAR = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+
+// `/usage`'ın sıfırlanma zamanı: `Oct 24, 7:59pm (Europe/Istanbul)` ya da `7:59pm`,
+// bu makinenin saat diliminde; geçmişte kalırsa bir sonraki gün ya da yıl.
+export const sifirlanmaCoz = (metin: string, now: number): string | undefined => {
+  const m = metin
+    .replace(/\(.*?\)/g, '')
+    .trim()
+    .match(/^(?:([A-Za-z]{3})[a-z]*\.? (\d{1,2}),? )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i)
+  if (m === null) return undefined
+  const [, ay, gun, saatS = '0', dk = '0', ogle = 'am'] = m
+  let saat = Number(saatS) % 12
+  if (ogle.toLowerCase() === 'pm') saat += 12
+  const simdi = new Date(now)
+  if (ay !== undefined && gun !== undefined) {
+    const ayNo = AYLAR.indexOf(ay.toLowerCase())
+    if (ayNo < 0) return undefined
+    const d = new Date(simdi.getFullYear(), ayNo, Number(gun), saat, Number(dk))
+    if (d.getTime() < now - 2 * 86_400_000) d.setFullYear(d.getFullYear() + 1)
+    return d.toISOString()
+  }
+  const d = new Date(simdi.getFullYear(), simdi.getMonth(), simdi.getDate(), saat, Number(dk))
+  if (d.getTime() < now) d.setDate(d.getDate() + 1)
+  return d.toISOString()
+}
+
+// `/usage` çıktısındaki 5 saatlik ve haftalık satırlar.
+export const usageCoz = (metin: string, now: number): Limit[] => {
+  const satirlar: [string, RegExp][] = [
+    ['five_hour', /^Current session:\s*([\d.]+)% used(?:\s*·\s*resets\s+(.+?))?\s*$/im],
+    ['seven_day', /^Current week \(all models\):\s*([\d.]+)% used(?:\s*·\s*resets\s+(.+?))?\s*$/im],
+  ]
+  return satirlar.flatMap(([kind, desen]) => {
+    const m = metin.match(desen)
+    if (m === null || m[1] === undefined) return []
+    return [{ kind, percentUsed: Number(m[1]), resetsAt: m[2] === undefined ? undefined : sifirlanmaCoz(m[2], now) }]
+  })
+}
+
+// Bu makinedeki tüm oturumlar en taze limitleri modun ortak deposunda paylaşır.
+let limitZamani = 0
+
+async function limitYaz($: EngineInterface, liste: readonly Limit[], at: number, kaynak: 'oturum' | 'paylasim' | 'usage') {
+  const simdi = await $.clock.now()
+  const ham = liste.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt }))
+  await update($, usage, u => {
+    const yeni = limitler(ham, simdi)
+    // /usage'ın göstermediği türler (harcama limiti gibi) korunur.
+    return { ...u, limits: [...yeni, ...u.limits.filter(l => !yeni.some(y => y.kind === l.kind))] }
+  })
+  limitZamani = at
+  await update($, limitDurumu, d => ({ ...d, at, kaynak }))
+  if (kaynak !== 'paylasim') {
+    await $.store.set('sonLimitler', { at, limits: ham }).catch(() => undefined)
+  }
+}
+
+async function paylasimOku($: EngineInterface) {
+  const kayit = (await $.store.get('sonLimitler').catch(() => undefined)) as { at?: number; limits?: Limit[] } | undefined
+  if (kayit?.at !== undefined && Array.isArray(kayit.limits) && kayit.at > limitZamani && kayit.limits.length > 0) {
+    await limitYaz($, kayit.limits, kayit.at, 'paylasim')
+  }
+}
+
+async function usageYenile($: EngineInterface) {
+  if ((await read($, limitDurumu)).yenileniyor) return
+  await update($, limitDurumu, d => ({ ...d, yenileniyor: true }))
+  try {
+    const r = await $.command.run({ command: 'usage', args: '' } as never).catch(() => undefined) as { text?: string } | undefined
+    const simdi = await $.clock.now()
+    const liste = usageCoz(r?.text ?? '', simdi)
+    if (liste.length === 0) {
+      $.ui.toast('Limitler okunamadı (/usage yanıt vermedi)')
+      return
+    }
+    await limitYaz($, liste, simdi, 'usage')
+  } finally {
+    await update($, limitDurumu, d => ({ ...d, yenileniyor: false }))
+  }
+}
+
+const once = (ms: number) =>
+  ms < 60_000 ? 'şimdi' : ms < 3_600_000 ? `${Math.floor(ms / 60_000)} dk önce` : `${Math.floor(ms / 3_600_000)} sa önce`
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -449,8 +535,16 @@ export const register: Register = on => {
       contextTokens: now.context.tokens ?? u.contextTokens,
       contextWindow: now.context.window,
       contextPercent: now.context.percent ?? u.contextPercent,
-      limits: now.rateLimits.length > 0 ? limitler(now.rateLimits, simdi) : u.limits,
     }))
+    if (now.rateLimits.length > 0) await limitYaz($, now.rateLimits, simdi, 'oturum')
+    await paylasimOku($)
+    // Başka bir oturumun ölçtüğü daha taze limitler 30 saniyede bir alınır.
+    $.clock.every(30_000, () => {
+      void paylasimOku($)
+        .then(() => $.clock.now())
+        .then(n => update($, saat, () => n))
+        .catch(() => undefined)
+    })
 
     return next(e)
   })
@@ -528,8 +622,8 @@ export const register: Register = on => {
       contextTokens: e.context.tokens ?? u.contextTokens,
       contextWindow: e.context.window,
       contextPercent: e.context.percent ?? u.contextPercent,
-      limits: e.rateLimits.length > 0 ? limitler(e.rateLimits, simdi) : u.limits,
     }))
+    if (e.rateLimits.length > 0) await limitYaz($, e.rateLimits, simdi, 'oturum')
 
     return next(e)
   })
@@ -905,28 +999,47 @@ export const register: Register = on => {
       )
     }
 
+    const ld = await read($, limitDurumu)
+    await read($, saat)
+    const limitSimdi = await $.clock.now().catch(() => ld.at)
+    const yenileDugmesi = (
+      <Button key="limit-yenile" plain onPress={() => usageYenile($)}>
+        <Text color="cyan">{ld.yenileniyor ? ' … yenileniyor' : ' ↻'}</Text>
+      </Button>
+    )
     if (u.limits.length > 0) {
-      const limitBar = Math.max(6, Math.min(20, Math.floor((e.props.bodyColumns - 60) / 2)))
+      const limitBar = Math.max(6, Math.min(20, Math.floor((e.props.bodyColumns - 70) / 2)))
       satirlar.push(
-        <Text key="limit">
-          {u.limits.map((l, i) => (
-            <Text key={l.kind}>
-              {i > 0 ? '   ' : ''}
-              {LIMIT_ADI[l.kind] ?? l.kind}{' '}
-              <Text color={l.percentUsed >= 90 ? 'red' : l.percentUsed >= 70 ? 'yellow' : 'green'}>
-                {cubuk(l.percentUsed, limitBar)} %{l.percentUsed}
+        <Box key="limit" flexDirection="row">
+          <Text>
+            {u.limits.map((l, i) => (
+              <Text key={l.kind}>
+                {i > 0 ? '   ' : ''}
+                {LIMIT_ADI[l.kind] ?? l.kind}{' '}
+                <Text color={l.percentUsed >= 90 ? 'red' : l.percentUsed >= 70 ? 'yellow' : 'green'}>
+                  {cubuk(l.percentUsed, limitBar)} %{l.percentUsed}
+                </Text>
+                <Text dimColor>{sifirlanma(l.resetsAt, l.kind)}</Text>
+                {l.bitis === undefined ? (
+                  ''
+                ) : l.resetsAt !== undefined && l.bitis >= new Date(l.resetsAt).getTime() ? (
+                  <Text color="green"> · bu hızla yetişir</Text>
+                ) : (
+                  <Text color={l.percentUsed >= 70 ? 'red' : 'yellow'}> · tahmini bitiş {tarih(l.bitis)}</Text>
+                )}
               </Text>
-              <Text dimColor>{sifirlanma(l.resetsAt, l.kind)}</Text>
-              {l.bitis === undefined ? (
-                ''
-              ) : l.resetsAt !== undefined && l.bitis >= new Date(l.resetsAt).getTime() ? (
-                <Text color="green"> · bu hızla yetişir</Text>
-              ) : (
-                <Text color={l.percentUsed >= 70 ? 'red' : 'yellow'}> · tahmini bitiş {tarih(l.bitis)}</Text>
-              )}
-            </Text>
-          ))}
-        </Text>,
+            ))}
+            {ld.at > 0 ? <Text dimColor>   {once(limitSimdi - ld.at)}</Text> : ''}
+          </Text>
+          {yenileDugmesi}
+        </Box>,
+      )
+    } else {
+      satirlar.push(
+        <Box key="limit" flexDirection="row">
+          <Text dimColor>Limitler henüz bilinmiyor</Text>
+          {yenileDugmesi}
+        </Box>,
       )
     }
 
