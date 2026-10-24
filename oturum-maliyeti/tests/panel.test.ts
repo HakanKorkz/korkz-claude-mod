@@ -286,3 +286,46 @@ test('dal değişmezse git hatası gösterilir', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /⎇ main/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('alt ajanlar: tür, model, görev, süre, araç ve durum', async ($, on) => {
+  const saat = mock.clock(on, { now: Date.parse('2026-10-24T10:00:00Z') })
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('agent.spawn', ($, e) => ({ model: e.subagentType === 'Explore' ? 'claude-haiku-5-5' : 'claude-opus-5-5', agentId: e.subagentType === 'Explore' ? 'a1' : 'a2' }))
+  on('agent.list', () => ({ value: [] }) as never)
+  on('tool.call', () => ({ result: {}, text: 'ok' }) as never)
+  on('turn.step', async function* ($, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  on('turn.complete', () => ({ text: '' }))
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+
+  const spawn = (subagentType: string, description: string) =>
+    $.agent.spawn({ prompt: 'x', description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5' } as never)
+  await spawn('Explore', 'dosyaları ara')
+  await spawn('general-purpose', 'testleri düzelt')
+
+  // a2 alt istekte Sonnet'e geçer, a1 bir Grep çalıştırırken görülür.
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-sonnet-5-5', messageCount: 1, agentId: 'a2' })) { /* akış */ }
+  await $.tool.call({ tool: 'Grep', pattern: 'x', agentId: 'a1' } as never)
+  await $.tool.call({ tool: 'Read', file_path: '/x', agentId: 'a1' } as never)
+  await saat.advance(65_000)
+
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 160 } } as never)
+  expect(await ui.find({ type: 'Text', text: /👥 Alt ajanlar 2 çalışıyor/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /⟳ Explore Haiku 5\.5 · dosyaları ara · 1 dk 5 sn · 2 araç/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /⟳ general-purpose Sonnet 5\.5 · testleri düzelt/ })).toBeDefined()
+
+  await $.turn.complete({
+    answer: 'bulundu', durationMs: 65_000, isAborted: false, turnId: 't1', reason: 'answer', agentId: 'a1',
+    usage: { model: 'claude-haiku-5-5', input_tokens: 9000, output_tokens: 1000, cache_read_input_tokens: 2000, cache_creation_input_tokens: 0 },
+  })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't2', reason: 'error', agentId: 'a2' })
+  expect(await ui.find({ type: 'Text', text: /👥 Alt ajanlar hepsi bitti · 2 bitti/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✓ Explore .*12\.0K token/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✗ general-purpose/ })).toBeDefined()
+
+  // Kullanıcının yeni mesajında biten ajanlar listeden kalkar.
+  await $.prompt.submit({ text: 'devam' } as never)
+  expect(await ui.find({ type: 'Text', text: /Alt ajanlar/ })).toBeUndefined()
+  await ui.unmount()
+})

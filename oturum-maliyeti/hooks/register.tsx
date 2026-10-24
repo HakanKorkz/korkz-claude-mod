@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Dal, Erisim, Git, Limit, Plugins, Tools, Usage, Worktree } from '../types'
+import type { AltAjan, Dal, Erisim, Git, Limit, Plugins, Tools, Usage, Worktree } from '../types'
 
 // Eski sürümün açtığı yan panel; açık kaldıysa kapatılır.
 const ESKI_PANEL = 'oturum-maliyeti'
@@ -40,6 +40,8 @@ const git = atom({ plugin: 'oturum-maliyeti', key: 'git' } as const, null as Git
 const gitMenu = atom({ plugin: 'oturum-maliyeti', key: 'gitMenu' } as const, null as 'dal' | 'worktree' | null)
 const dallar = atom({ plugin: 'oturum-maliyeti', key: 'dallar' } as const, [] as Dal[])
 const worktreeler = atom({ plugin: 'oturum-maliyeti', key: 'worktreeler' } as const, [] as Worktree[])
+const ajanlar = atom({ plugin: 'oturum-maliyeti', key: 'ajanlar' } as const, [] as AltAjan[])
+const saat = atom({ plugin: 'oturum-maliyeti', key: 'saat' } as const, 0)
 const erisim = atom({ plugin: 'oturum-maliyeti', key: 'erisim' } as const, {} as Record<string, Erisim>)
 
 // `claude-opus-5-5[1m]` → `Opus 5.5 (1M)`; tarih ekleri (`-20251001`) atılır.
@@ -277,6 +279,39 @@ async function worktreeyeGec($: EngineInterface, w: Worktree) {
   $.ui.toast(`${w.ana ? '📁' : '🌳'} ${w.ad} ${w.ana ? 'ana çalışma ağacına' : "worktree'sine"} geçildi`)
 }
 
+// `65_000` → `1 dk 5 sn`
+export const sureYaz = (ms: number) => {
+  const sn = Math.max(0, Math.round(ms / 1000))
+  return sn >= 60 ? `${Math.floor(sn / 60)} dk ${sn % 60} sn` : `${sn} sn`
+}
+
+const ajanGuncelle = ($: EngineInterface, id: string, fn: (a: AltAjan) => AltAjan) =>
+  update($, ajanlar, list => list.map(a => (a.id === id ? fn(a) : a)))
+
+// Kaydı olmayan bir ajan (forked skill gibi agent.spawn'sız döngüler) ilk görüldüğünde eklenir.
+async function ajanBul($: EngineInterface, id: string) {
+  if ((await read($, ajanlar)).some(a => a.id === id)) return
+  const bilgi = (await $.agent.list().catch(() => [])).find(a => a.id === id)
+  const simdi = await $.clock.now()
+  await update($, ajanlar, list =>
+    list.some(a => a.id === id)
+      ? list
+      : [...list, {
+          id,
+          tur: bilgi?.type ?? 'ajan',
+          aciklama: bilgi?.description ?? '',
+          model: null,
+          durum: 'calisiyor' as const,
+          basladi: simdi,
+          bitti: null,
+          arac: 0,
+          sonArac: null,
+          token: 0,
+          ustId: bilgi?.parentId ?? null,
+        }],
+  )
+}
+
 async function menuyuAc($: EngineInterface) {
   await update($, gitMenu, () => null)
   const acik = await update($, isModelMenuOpen, a => !a)
@@ -396,6 +431,13 @@ export const register: Register = on => {
     await update($, plugins, p => ({ ...p, running: {}, thisTurn: [] }))
     await update($, isModelMenuOpen, () => false)
     await update($, gitMenu, () => null)
+    await update($, ajanlar, () => [])
+    // Çalışan bir ajan varken süreler her saniye ilerlesin.
+    $.clock.every(1000, () => {
+      void read($, ajanlar)
+        .then(list => (list.some(a => a.durum === 'calisiyor') ? $.clock.now().then(n => update($, saat, () => n)) : undefined))
+        .catch(() => undefined)
+    })
     await modelYenile($)
     await projeYukle($)
     await gitYenile($)
@@ -440,7 +482,38 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // Bu projede seçili model ana döngünün her isteğinde kullanılır; alt ajanlar kendi modelinde kalır.
+  on('agent.spawn', async ($, e, next) => {
+    const r = await next(e)
+    if (r.agentId !== undefined) {
+      const id = r.agentId
+      const simdi = await $.clock.now()
+      await update($, ajanlar, list => [
+        ...list.filter(a => a.id !== id),
+        {
+          id,
+          tur: e.subagentType || 'general-purpose',
+          aciklama: e.description,
+          model: r.model,
+          durum: 'calisiyor' as const,
+          basladi: simdi,
+          bitti: null,
+          arac: 0,
+          sonArac: null,
+          token: 0,
+          ustId: e.parentAgentId ?? null,
+        },
+      ])
+      await update($, saat, () => simdi)
+    }
+    return r
+  }).catch(($, e, next) => next(e))
+
   on('turn.step', async function* ($, e, next) {
+    if (e.agentId !== undefined) {
+      const id = e.agentId
+      await ajanBul($, id).catch(() => undefined)
+      await ajanGuncelle($, id, a => ({ ...a, model: e.model, durum: 'calisiyor', bitti: null })).catch(() => undefined)
+    }
     if (e.agentId === undefined && projeKimligi !== undefined && e.model !== projeKimligi) {
       return yield* next({ ...e, model: projeKimligi })
     }
@@ -464,6 +537,10 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     if (e.command === undefined) {
       await update($, plugins, p => ({ ...p, thisTurn: [] }))
+      // Yeni bir istekte biten ajanlar listeden çıkar; çalışanlar kalır.
+      if ((e.origin?.kind ?? 'composer') === 'composer') {
+        await update($, ajanlar, list => list.filter(a => a.durum === 'calisiyor'))
+      }
     }
     if (e.command === undefined && bekleyenNot !== undefined) {
       const not = bekleyenNot
@@ -487,6 +564,8 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     await update($, tools, t => ({ ...t, running: ekle(t.running, e.tool, 1) }))
+    const ajanId = e.agentId
+    if (ajanId !== undefined) await ajanGuncelle($, ajanId, a => ({ ...a, sonArac: e.tool }))
     const plugin = pluginBul(e.tool, e as unknown as Record<string, unknown>, (await read($, plugins)).active)
     if (e.tool === 'Skill') skillAraci += 1
     if (plugin !== undefined) {
@@ -509,6 +588,7 @@ export const register: Register = on => {
         errors: t.errors + (hata ? 1 : 0),
       }))
       if (e.tool === 'Skill') skillAraci -= 1
+      if (ajanId !== undefined) await ajanGuncelle($, ajanId, a => ({ ...a, arac: a.arac + 1, sonArac: null }))
       // Dal ya da worktree değiştiren araçlardan sonra şerit hemen güncellensin.
       if (e.tool === 'Bash' || e.tool === 'EnterWorktree' || e.tool === 'ExitWorktree') await gitYenile($)
       if (plugin !== undefined) {
@@ -522,6 +602,19 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      const id = e.agentId
+      const simdi = await $.clock.now()
+      const t = e.usage
+      const harcanan = t === undefined ? 0 : t.input_tokens + t.output_tokens + t.cache_read_input_tokens + t.cache_creation_input_tokens
+      await ajanGuncelle($, id, a => ({
+        ...a,
+        durum: e.isAborted ? 'durdu' : e.reason === 'error' ? 'hata' : 'bitti',
+        bitti: simdi,
+        sonArac: null,
+        token: a.token + harcanan,
+      }))
+    }
     if (e.agentId === undefined) {
       await pluginYenile($)
       await modelYenile($)
@@ -748,6 +841,52 @@ export const register: Register = on => {
     const kullanilan = [...new Set([...Object.keys(sunucuCagri), ...aktif])].sort(
       (x, y) => Number(aktif.has(y)) - Number(aktif.has(x)) || x.localeCompare(y),
     )
+    const ajanListesi = await read($, ajanlar)
+    if (ajanListesi.length > 0) {
+      // `saat` okunur ki zamanlayıcı her saniye yeniden çizdirsin; süre gerçek saatten.
+      await read($, saat)
+      const simdi = await $.clock.now()
+      const calisan = ajanListesi.filter(a => a.durum === 'calisiyor').length
+      const derinlik = (a: AltAjan): number => {
+        let d = 0
+        let ust = a.ustId
+        while (ust !== null && d < 3) {
+          d += 1
+          ust = ajanListesi.find(x => x.id === ust)?.ustId ?? null
+        }
+        return d
+      }
+      const gorunen = [...ajanListesi.filter(a => a.durum === 'calisiyor'), ...ajanListesi.filter(a => a.durum !== 'calisiyor').reverse()].slice(0, 6)
+      satirlar.push(
+        <Box key="ajanlar" flexDirection="column">
+          <Text>
+            👥 Alt ajanlar{' '}
+            {calisan > 0 ? <Text color="cyan">{calisan} çalışıyor</Text> : <Text dimColor>hepsi bitti</Text>}
+            {ajanListesi.length - calisan > 0 ? <Text dimColor> · {ajanListesi.length - calisan} bitti</Text> : ''}
+          </Text>
+          {gorunen.map(a => {
+            const aktif = a.durum === 'calisiyor'
+            const isaret = aktif ? '⟳' : a.durum === 'bitti' ? '✓' : a.durum === 'hata' ? '✗' : '■'
+            const renk = aktif ? 'cyan' : a.durum === 'bitti' ? 'green' : a.durum === 'hata' ? 'red' : 'yellow'
+            return (
+              <Text key={a.id} dimColor={!aktif}>
+                {'   '}{'  '.repeat(derinlik(a))}
+                <Text color={renk}>{isaret}</Text> <Text bold={aktif}>{a.tur}</Text>
+                {a.model === null ? '' : <Text color="magenta"> {modelAdi(a.model)}</Text>}
+                {a.aciklama === '' ? '' : ` · ${a.aciklama}`}
+                <Text dimColor>
+                  {' · '}{sureYaz((a.bitti ?? simdi) - a.basladi)} · {a.arac} araç
+                  {a.token > 0 ? ` · ${kisa(a.token)} token` : ''}
+                </Text>
+                {aktif && a.sonArac !== null ? <Text color="cyan"> ▸ {a.sonArac}</Text> : ''}
+              </Text>
+            )
+          })}
+          {ajanListesi.length > gorunen.length ? <Text dimColor>{'   '}+{ajanListesi.length - gorunen.length} ajan daha</Text> : null}
+        </Box>,
+      )
+    }
+
     if (kullanilan.length > 0) {
       satirlar.push(
         <Text key="mcp">

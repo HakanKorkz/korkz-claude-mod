@@ -37,6 +37,26 @@ export type Worktree = {
   ana: boolean
 }
 
+export type AltAjan = {
+  id: string
+  /** Ajan türü (`Explore`, `general-purpose`, `plugin:ajan`). */
+  tur: string
+  /** Agent çağrısının görev açıklaması. */
+  aciklama: string
+  /** Son model isteğinin modeli. */
+  model: string | null
+  durum: 'calisiyor' | 'bitti' | 'hata' | 'durdu'
+  basladi: number
+  bitti: number | null
+  /** Tamamlanan araç çağrısı sayısı. */
+  arac: number
+  /** Şu an çalışan araç. */
+  sonArac: string | null
+  token: number
+  /** Onu başlatan alt ajan; ana döngüden başladıysa null. */
+  ustId: string | null
+}
+
 export type Usage = {
   usd: number | null
   contextTokens: number | null
@@ -92,6 +112,10 @@ declare module 'claude-code' {
       gitMenu: 'dal' | 'worktree' | null
       dallar: Dal[]
       worktreeler: Worktree[]
+      /** Bu oturumdaki alt ajanlar, başlama sırasıyla. */
+      ajanlar: AltAjan[]
+      /** Çalışan ajanların süresini ilerletmek için son saat. */
+      saat: number
     }
   }
 }
