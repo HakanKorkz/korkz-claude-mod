@@ -446,3 +446,29 @@ test('göreli tarih ve kalan süre', () => {
   expect(kalanYaz(40 * 60_000)).toBe('40 dk sonra')
   expect(kalanYaz(27 * 3_600_000)).toBe('1 gün 3 sa sonra')
 })
+
+test('⏻ Kapat onay ister, Evet /exit çalıştırır', async ($, on) => {
+  let cikis = 0
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('ui.toast', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', () => ({ cwd: '/p' }) as never)
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  on('command.run', { command: 'exit' }, () => {
+    cikis += 1
+    return { text: '' } as never
+  })
+  await $.session.start({ source: 'startup', cwd: '/p' } as never)
+
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 160 } } as never)
+  await ui.press({ key: 'kapat' })
+  expect(await ui.find({ type: 'Text', text: /kapatılsın mı/ })).toBeDefined()
+  await ui.press({ key: 'kapat-vazgec' })
+  expect(await ui.find({ type: 'Text', text: /⏻ Kapat/ })).toBeDefined()
+  expect(cikis).toBe(0)
+
+  await ui.press({ key: 'kapat' })
+  await ui.press({ key: 'kapat-evet' })
+  expect(cikis).toBe(1)
+  await ui.unmount()
+})

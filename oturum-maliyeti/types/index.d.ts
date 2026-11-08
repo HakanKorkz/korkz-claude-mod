@@ -125,6 +125,8 @@ declare module 'claude-code' {
       /** Çalışan ajanların süresini ilerletmek için son saat. */
       saat: number
       limitDurumu: LimitDurumu
+      /** Kapat butonuna basıldı, onay bekleniyor. */
+      cikisOnay: boolean
     }
   }
 }

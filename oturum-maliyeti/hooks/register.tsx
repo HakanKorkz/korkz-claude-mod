@@ -43,6 +43,7 @@ const worktreeler = atom({ plugin: 'oturum-maliyeti', key: 'worktreeler' } as co
 const ajanlar = atom({ plugin: 'oturum-maliyeti', key: 'ajanlar' } as const, [] as AltAjan[])
 const saat = atom({ plugin: 'oturum-maliyeti', key: 'saat' } as const, 0)
 const limitDurumu = atom({ plugin: 'oturum-maliyeti', key: 'limitDurumu' } as const, { at: 0, kaynak: null, yenileniyor: false } as LimitDurumu)
+const cikisOnay = atom({ plugin: 'oturum-maliyeti', key: 'cikisOnay' } as const, false)
 const erisim = atom({ plugin: 'oturum-maliyeti', key: 'erisim' } as const, {} as Record<string, Erisim>)
 
 // `claude-opus-5-5[1m]` → `Opus 5.5 (1M)`; tarih ekleri (`-20251001`) atılır.
@@ -791,6 +792,26 @@ export const register: Register = on => {
     const projeAdi = kok.split('/').filter(Boolean).pop() ?? 'bu proje'
     const g = await read($, git)
     const acikGit = await read($, gitMenu)
+    const onay = await read($, cikisOnay)
+    const kapat = onay ? (
+      <Box key="kapat" flexDirection="row">
+        <Text color="red">   Claude kapatılsın mı? </Text>
+        <Button key="kapat-evet" onPress={() => $.command.run({ command: 'exit' })}>
+          <Text bold color="red">Evet</Text>
+        </Button>
+        <Text> </Text>
+        <Button key="kapat-vazgec" onPress={() => update($, cikisOnay, () => false)}>
+          <Text>Vazgeç</Text>
+        </Button>
+      </Box>
+    ) : (
+      <Box key="kapat" flexDirection="row">
+        <Text>   </Text>
+        <Button key="kapat" plain onPress={() => update($, cikisOnay, () => true)}>
+          <Text color="red">⏻ Kapat</Text>
+        </Button>
+      </Box>
+    )
     const modelSatiri = (
       <Box key="model" flexDirection="row">
         <Text>🤖 </Text>
@@ -817,6 +838,7 @@ export const register: Register = on => {
             <Text dimColor>  {g.isWorktree ? `worktree · ${g.repo}` : 'ana çalışma ağacı'}</Text>
           </Box>
         )}
+        {menuAcik ? null : kapat}
       </Box>
     )
     const modelMenusu = menuAcik && secenekler.length > 0 ? (
