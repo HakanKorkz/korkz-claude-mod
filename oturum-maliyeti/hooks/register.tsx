@@ -340,6 +340,10 @@ async function modeleGec($: EngineInterface, secenek: string) {
 }
 
 const sayi = (n: number) => n.toLocaleString('tr-TR')
+const dolar = (n: number) => {
+  const basamak = Math.abs(n) >= 1 ? 2 : 4
+  return `$${n.toLocaleString('tr-TR', { minimumFractionDigits: basamak, maximumFractionDigits: basamak })}`
+}
 const kisa = (n: number) =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : `${n}`
 const cubuk = (yuzde: number, genislik: number) => {
@@ -901,7 +905,7 @@ export const register: Register = on => {
       ...(modelMenusu === null ? [] : [modelMenusu]),
       ...(gitMenusu === null ? [] : [gitMenusu]),
       <Text key="ozet">
-        <Text bold>💰 {u.usd === null ? '—' : `$${u.usd.toFixed(4)}`}</Text>
+        <Text bold>💰 {u.usd === null ? '—' : dolar(u.usd)}</Text>
         {'   '}Bağlam {cubuk(u.contextPercent ?? 0, barGenislik)}{' '}
         {u.contextPercent === null ? '—' : `%${u.contextPercent}`}
         {u.contextTokens === null || u.contextWindow === null

@@ -23,7 +23,7 @@ test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120 }, viewport: { rows: 40, columns: 125 } } as never)
-    expect(await ui.find({ type: 'Text', text: /\$0\.1234/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\$0,1234/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /%25/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Tur 1 ·/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5 saatlik .*%23\.5 ↻17:30/ })).toBeDefined()
