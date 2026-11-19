@@ -928,8 +928,21 @@ export const register: Register = on => {
       ...(gitMenusu === null ? [] : [gitMenusu]),
       <Text key="ozet">
         <Text bold>💰 {u.usd === null ? '—' : dolar(u.usd)}</Text>
-        {'   '}Bağlam {cubuk(u.contextPercent ?? 0, barGenislik)}{' '}
-        {u.contextPercent === null ? '—' : `%${u.contextPercent}`}
+        {'   '}Bağlam{' '}
+        <Text
+          color={
+            u.contextPercent === null
+              ? undefined
+              : u.contextPercent >= 90
+                ? 'red'
+                : u.contextPercent >= 70
+                  ? 'yellow'
+                  : 'green'
+          }
+        >
+          {cubuk(u.contextPercent ?? 0, barGenislik)}{' '}
+          {u.contextPercent === null ? '—' : `%${u.contextPercent}`}
+        </Text>
         {u.contextTokens === null || u.contextWindow === null
           ? ''
           : ` (${kisa(u.contextTokens)} / ${kisa(u.contextWindow)})`}
