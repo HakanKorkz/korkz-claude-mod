@@ -65,6 +65,12 @@ export type LimitDurumu = {
   yenileniyor: boolean
 }
 
+// Claude Code sürümü: çalışan ve güncelleme kanalındaki son sürüm.
+export type Surum = {
+  mevcut: string
+  son: string | null
+}
+
 export type Usage = {
   usd: number | null
   contextTokens: number | null
@@ -127,6 +133,7 @@ declare module 'claude-code' {
       limitDurumu: LimitDurumu
       /** Kapat butonuna basıldı, onay bekleniyor. */
       cikisOnay: boolean
+      surum: Surum | null
     }
   }
 }

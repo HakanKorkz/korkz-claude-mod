@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { dallariCoz, gitCoz, goreliTarih, kalanYaz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi, sifirlanmaCoz, usageCoz, worktreeleriCoz } from '../hooks/register'
+import { dallariCoz, sonSurumCoz, surumKarsilastir, gitCoz, goreliTarih, kalanYaz, kimlikCoz, menuSecenekleri, modelAdi, secenekAdi, sifirlanmaCoz, usageCoz, worktreeleriCoz } from '../hooks/register'
 
 test('şerit tur tokenlarını ve maliyeti gösterir', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-15T06:00:00Z') })
@@ -471,4 +471,50 @@ test('⏻ Kapat onay ister, Evet /exit çalıştırır', async ($, on) => {
   await ui.press({ key: 'kapat-evet' })
   expect(cikis).toBe(1)
   await ui.unmount()
+})
+
+test('sürüm karşılaştırma ve npm dist-tags', () => {
+  expect(surumKarsilastir('2.1.328', '2.1.329')).toBeLessThan(0)
+  expect(surumKarsilastir('2.1.329', '2.1.329')).toBe(0)
+  expect(surumKarsilastir('2.2.0', '2.1.999')).toBeGreaterThan(0)
+  expect(sonSurumCoz('{"stable":"2.1.311","latest":"2.1.329"}', 'latest')).toBe('2.1.329')
+  expect(sonSurumCoz('{"stable":"2.1.311","latest":"2.1.329"}', 'stable')).toBe('2.1.311')
+  expect(sonSurumCoz('bozuk', 'latest')).toBeNull()
+})
+
+test('güncelleme varsa şerit eski ve yeni sürümü gösterir, saatte bir yeniden bakar', async ($, on) => {
+  const saat = mock.clock(on, { now: Date.parse('2026-11-20T10:00:00Z') })
+  const toasts: string[] = []
+  let mevcut = '2.1.328'
+  let son = '2.1.329'
+  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return h(Box, { key: 'bos' }) as never })
+  on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } as never })
+  on('ui.close', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', () => ({ cwd: '/p' }) as never)
+  on('session.usage', () => ({ value: { context: { window: 200_000 }, rateLimits: [] } }) as never)
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  on('session.version', () => ({ value: { version: mevcut, base: mevcut } }) as never)
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: `{"stable":"2.1.311","latest":"${son}"}` } }) as never)
+  await $.session.start({ source: 'startup', cwd: '/p' } as never)
+  await saat.advance(1)
+
+  const ui = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 160 } } as never)
+  expect(await ui.find({ type: 'Text', text: /v2\.1\.328 → v2\.1\.329/ })).toBeDefined()
+  expect(toasts.filter(t => t.includes('2.1.329 çıktı (şu an 2.1.328)'))).toHaveLength(1)
+
+  son = '2.1.330'
+  await saat.advance(3_600_000)
+  await saat.advance(1)
+  expect(await ui.find({ type: 'Text', text: /v2\.1\.328 → v2\.1\.330/ })).toBeDefined()
+  expect(toasts.at(-1)).toContain('2.1.330 çıktı')
+  await ui.unmount()
+
+  mevcut = '2.1.330'
+  await $.session.start({ source: 'startup', cwd: '/p' } as never)
+  await saat.advance(1)
+  const ui2 = await $.ui.mount({ plugin: 'oturum-maliyeti', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 160 } } as never)
+  expect(await ui2.find({ type: 'Text', text: /güncel/ })).toBeDefined()
+  expect(await ui2.find({ type: 'Text', text: /→/ })).toBeUndefined()
+  await ui2.unmount()
 })

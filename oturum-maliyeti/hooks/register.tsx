@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AltAjan, Dal, Erisim, Git, Limit, LimitDurumu, Plugins, Tools, Usage, Worktree } from '../types'
+import type { AltAjan, Dal, Erisim, Git, Limit, LimitDurumu, Plugins, Surum, Tools, Usage, Worktree } from '../types'
 
 // Eski sürümün açtığı yan panel; açık kaldıysa kapatılır.
 const ESKI_PANEL = 'oturum-maliyeti'
@@ -45,6 +45,7 @@ const saat = atom({ plugin: 'oturum-maliyeti', key: 'saat' } as const, 0)
 const limitDurumu = atom({ plugin: 'oturum-maliyeti', key: 'limitDurumu' } as const, { at: 0, kaynak: null, yenileniyor: false } as LimitDurumu)
 const cikisOnay = atom({ plugin: 'oturum-maliyeti', key: 'cikisOnay' } as const, false)
 const erisim = atom({ plugin: 'oturum-maliyeti', key: 'erisim' } as const, {} as Record<string, Erisim>)
+const surum = atom({ plugin: 'oturum-maliyeti', key: 'surum' } as const, null as Surum | null)
 
 // `claude-opus-5-5[1m]` → `Opus 5.5 (1M)`; tarih ekleri (`-20251001`) atılır.
 export const modelAdi = (id: string) => {
@@ -543,6 +544,47 @@ async function otomatikYenile($: EngineInterface) {
   await usageYenile($)
 }
 
+// Claude Code sürümü: çalışan sürüm ve güncelleme kanalındaki (latest/stable) son sürüm.
+const SURUM_ADRESI = 'https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags'
+const SURUM_ARALIK = 3_600_000
+
+// `2.1.328` ile `2.1.329` karşılaştırması: a < b ise negatif.
+export const surumKarsilastir = (a: string, b: string) => {
+  const x = a.split('.').map(n => parseInt(n, 10) || 0)
+  const y = b.split('.').map(n => parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const fark = (x[i] ?? 0) - (y[i] ?? 0)
+    if (fark !== 0) return fark
+  }
+  return 0
+}
+
+// npm dist-tags yanıtından kanalın sürümü: `{"stable":"2.1.311","latest":"2.1.329"}`.
+export const sonSurumCoz = (metin: string, kanal: string) => {
+  try {
+    const v = (JSON.parse(metin) as Record<string, unknown>)[kanal]
+    return typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+async function surumYenile($: EngineInterface, bildir: boolean) {
+  const v = await $.session.version().catch(() => undefined)
+  if (v === undefined) return
+  const mevcut = (v.base ?? v.version).replace(/-.*$/, '')
+  const ayar = (await $.settings.read().catch(() => ({}))) as unknown as { autoUpdatesChannel?: string }
+  const kanal = ayar.autoUpdatesChannel === 'stable' ? 'stable' : 'latest'
+  const r = await $.http.fetch(SURUM_ADRESI).catch(() => undefined)
+  const son = r?.ok ? sonSurumCoz(r.text, kanal) : null
+  const eski = await read($, surum)
+  await update($, surum, () => ({ mevcut, son: son ?? eski?.son ?? null }))
+  const yeni = son !== null && surumKarsilastir(mevcut, son) < 0
+  if (yeni && (bildir || eski?.son !== son)) {
+    await $.ui.toast(`⬆ Claude Code ${son} çıktı (şu an ${mevcut}): istersen kapatıp claude update çalıştır`)
+  }
+}
+
 const once = (ms: number) =>
   ms < 60_000 ? 'şimdi' : ms < 3_600_000 ? `${Math.floor(ms / 60_000)} dk önce` : `${Math.floor(ms / 3_600_000)} sa önce`
 
@@ -580,6 +622,11 @@ export const register: Register = on => {
     if (now.rateLimits.length > 0) await limitYaz($, now.rateLimits, simdi, 'oturum')
     sonEtkinlik = simdi
     await paylasimOku($)
+    // Sürüm kontrolü açılışı bekletmez; saatte bir tekrarlanır.
+    void surumYenile($, true).catch(() => undefined)
+    $.clock.every(SURUM_ARALIK, () => {
+      void surumYenile($, false).catch(() => undefined)
+    })
     // Başka bir oturumun ölçtüğü daha taze limitler 30 saniyede bir alınır.
     $.clock.every(30_000, () => {
       void paylasimOku($)
@@ -793,6 +840,20 @@ export const register: Register = on => {
     const g = await read($, git)
     const acikGit = await read($, gitMenu)
     const onay = await read($, cikisOnay)
+    const sv = await read($, surum)
+    const guncellemeVar = sv !== null && sv.son !== null && surumKarsilastir(sv.mevcut, sv.son) < 0
+    const surumEtiketi = sv === null ? null : guncellemeVar ? (
+      <Text key="surum">
+        {'   '}
+        <Text color="yellow">⬆ v{sv.mevcut} → v{sv.son}</Text>
+        <Text dimColor> güncelleme var (kapat · claude update)</Text>
+      </Text>
+    ) : (
+      <Text key="surum" dimColor>
+        {'   '}v{sv.mevcut}
+        {sv.son === null ? '' : <Text color="green"> ✓ güncel</Text>}
+      </Text>
+    )
     const kapat = onay ? (
       <Box key="kapat" flexDirection="row">
         <Text color="red">   Claude kapatılsın mı? </Text>
@@ -838,6 +899,7 @@ export const register: Register = on => {
             <Text dimColor>  {g.isWorktree ? `worktree · ${g.repo}` : 'ana çalışma ağacı'}</Text>
           </Box>
         )}
+        {menuAcik ? null : surumEtiketi}
         {menuAcik ? null : kapat}
       </Box>
     )
